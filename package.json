@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
-    "build": "npm install && npm run build:ts",
+    "build": "npm install && npx prisma generate && npm run build:ts",
     "build:ts": "tsc",
     "email:test": "node scripts/test-email.js",
     "test": "jest",
