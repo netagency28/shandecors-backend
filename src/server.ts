@@ -62,6 +62,20 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// Simple test endpoint (no database required)
+app.get('/test', (req, res) => {
+  res.status(200).json({
+    message: 'CORS Test Endpoint - Working!',
+    origin: req.headers.origin,
+    timestamp: new Date().toISOString(),
+    env: {
+      NODE_ENV: process.env.NODE_ENV,
+      PORT: process.env.PORT,
+      HAS_DB_URL: !!process.env.DATABASE_URL
+    }
+  });
+});
+
 // Debug endpoint for CORS testing
 app.get('/debug-cors', (req, res) => {
   res.status(200).json({
