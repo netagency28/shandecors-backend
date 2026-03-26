@@ -17,38 +17,21 @@ dotenv.config();
 
 const app = express();
 const server = createServer(app);
-// CORS configuration
-const allowedOrigins = [
-  process.env.FRONTEND_URL || 'http://localhost:3000',
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'https://shandecors.vercel.app',
-  'https://shandecors.vercel.app/'  // Add trailing slash variant
-];
-
+// CORS configuration - temporarily use wildcard for debugging
 const corsOptions = {
-  origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    // Remove trailing slash from origin for comparison
-    const normalizedOrigin = origin.replace(/\/$/, '');
-    const normalizedAllowedOrigins = allowedOrigins.map(o => o.replace(/\/$/, ""));
-    
-    if (normalizedAllowedOrigins.includes(normalizedOrigin)) {
-      callback(null, true);
-    } else {
-      console.log('CORS blocked origin:', origin);
-      console.log('Allowed origins:', normalizedAllowedOrigins);
-      callback(new Error('Not allowed by CORS'), false);
-    }
-  },
+  origin: '*', // Temporary wildcard for debugging
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   preflightContinue: false,
   optionsSuccessStatus: 204
 };
+
+console.log('🔧 CORS Configuration:', {
+  allowedOrigins: corsOptions.origin,
+  credentials: corsOptions.credentials,
+  methods: corsOptions.methods
+});
 
 const io = new Server(server, {
   cors: corsOptions,
@@ -65,6 +48,10 @@ const limiter = rateLimit({
 app.use(helmet());
 app.use(compression());
 app.use(morgan('combined'));
+
+// Explicit preflight handler
+app.options('*', cors(corsOptions));
+
 app.use(limiter);
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
@@ -73,6 +60,16 @@ app.use(express.urlencoded({ extended: true }));
 // Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Debug endpoint for CORS testing
+app.get('/debug-cors', (req, res) => {
+  res.status(200).json({
+    message: 'CORS Debug Endpoint',
+    origin: req.headers.origin,
+    headers: req.headers,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // API routes
