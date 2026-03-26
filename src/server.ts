@@ -15,6 +15,23 @@ import routes from './routes';
 // Load environment variables
 dotenv.config();
 
+// Debug environment variables
+console.log('🔧 Environment Variables Debug:');
+console.log('- NODE_ENV:', process.env.NODE_ENV);
+console.log('- PORT:', process.env.PORT);
+console.log('- DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('- DATABASE_URL length:', process.env.DATABASE_URL?.length || 0);
+console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
+
+// Ensure DATABASE_URL is properly set
+if (!process.env.DATABASE_URL) {
+  console.error('❌ CRITICAL: DATABASE_URL is not set!');
+  console.error('❌ Make sure to set DATABASE_URL in Render environment variables!');
+  // Fallback for testing (remove this in production)
+  process.env.DATABASE_URL = "postgresql://postgres:Netagency$core@db.qkrcnxrabkmqrnlplagf.supabase.co:5432/postgres";
+  console.log('⚠️  Using fallback DATABASE_URL for testing');
+}
+
 const app = express();
 const server = createServer(app);
 // CORS configuration - temporarily use wildcard for debugging
