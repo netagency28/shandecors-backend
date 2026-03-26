@@ -1,0 +1,172 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  phone     String?
+  role      UserRole @default(CUSTOMER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders    Order[]
+  addresses Address[]
+  cart      Cart?
+
+  @@map("users")
+}
+
+model Address {
+  id          String  @id @default(cuid())
+  userId      String
+  street      String
+  city        String
+  state       String
+  postalCode  String
+  country     String
+  isDefault  Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("addresses")
+}
+
+model Category {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  description String?
+  image       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          String    @id @default(cuid())
+  name        String
+  slug        String    @unique
+  description String?
+  price       Float
+  comparePrice Float?
+  sku         String    @unique
+  stock       Int       @default(0)
+  images      String[]  // JSON array of image URLs
+  categoryId  String
+  isActive    Boolean   @default(true)
+  isFeatured  Boolean   @default(false)
+  tags        String[]  // JSON array of tags
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  category    Category @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+  cartItems   CartItem[]
+
+  @@map("products")
+}
+
+model Cart {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items    CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String @id @default(cuid())
+  cartId    String
+  productId String
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, productId])
+  @@map("cart_items")
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  userId        String
+  orderNumber   String      @unique
+  status        OrderStatus @default(PENDING)
+  subtotal      Float
+  tax           Float
+  shipping      Float
+  total         Float
+  currency      String      @default("INR")
+  paymentMethod String
+  paymentId     String?
+  paymentStatus PaymentStatus @default(PENDING)
+  shippingAddress Json?      // Shipping address as JSON
+  billingAddress  Json?      // Billing address as JSON
+  notes         String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  user  User        @relation(fields: [userId], references: [id])
+  items OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id       String @id @default(cuid())
+  orderId  String
+  productId String
+  quantity Int
+  price    Float
+  productSnapshot Json? // Product details snapshot at time of order
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}

@@ -1,0 +1,22 @@
+{
+  "contact": {
+    "title": "Contact Us",
+    "body": "If you need help with an order, custom decor consultation, or product details, reach out to us anytime.\n\nEmail: support@shandecor.in\nPhone: +91 98765 43210\nAddress: Shan Decor, New Delhi, India\n\nBusiness Hours:\nMonday to Saturday: 10:00 AM - 7:00 PM\nSunday: Closed",
+    "updated_at": "2026-03-21T00:00:00.000Z"
+  },
+  "terms": {
+    "title": "Terms and Conditions",
+    "body": "By using Shan Decor, you agree to these terms. Product prices and availability may change without prior notice. Orders may be cancelled in case of payment failure, inventory mismatch, or policy violations.\n\nUsers must provide accurate billing and shipping details. Any misuse of the website, content scraping, or fraudulent transactions may result in account suspension.\n\nAll trademarks, images, and content belong to Shan Decor unless otherwise stated.",
+    "updated_at": "2026-03-21T00:00:00.000Z"
+  },
+  "refunds": {
+    "title": "Refunds and Cancellation Policy",
+    "body": "Orders can be cancelled before dispatch. Once shipped, cancellation is not guaranteed.\n\nIf a payment is successful but order confirmation fails, contact support with transaction details.\n\nRefunds for approved cancellations or returns are processed to the original payment method within 5-7 business days after verification.\n\nDamaged or wrong items must be reported within 48 hours of delivery with photos.",
+    "updated_at": "2026-03-21T00:00:00.000Z"
+  },
+  "shipping": {
+    "title": "Shipping Policy",
+    "body": "We currently ship across India. Shipping timelines depend on destination and product availability. Typical dispatch time is 1-3 business days, and delivery is usually completed in 3-8 business days.\n\nShipping charges (if applicable) are shown during checkout. Delays due to weather, courier issues, or force majeure are outside our control.\n\nFor large or fragile decor items, additional handling time may apply.",
+    "updated_at": "2026-03-21T00:00:00.000Z"
+  }
+}
