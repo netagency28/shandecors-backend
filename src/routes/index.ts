@@ -1,13 +1,13 @@
 import { Router } from 'express';
 import authRoutes from './auth';
-import productRoutes from './products';
+import productRoutes from './products-mock'; // Use mock instead of database
 import cartRoutes from './cart';
 import orderRoutes from './orders';
 import userRoutes from './users';
 import adminRoutes from './admin';
 import uploadRoutes from './upload';
 import testRoutes from './test';
-import categoryRoutes from './categories';
+import categoryRoutes from './categories-mock'; // Use mock instead of database
 import paymentRoutes from './payments';
 import seedRoutes from './seed';
 import contentRoutes from './content';

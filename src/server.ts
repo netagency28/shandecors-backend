@@ -34,24 +34,68 @@ if (!process.env.DATABASE_URL) {
 
 const app = express();
 const server = createServer(app);
-// CORS configuration - temporarily use wildcard for debugging
-const corsOptions = {
-  origin: '*', // Temporary wildcard for debugging
+
+const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '');
+
+const parseAllowedOrigins = () => {
+  const configuredOrigins = [
+    process.env.FRONTEND_URL,
+    process.env.CORS_ORIGINS,
+    process.env.CORS_ORIGIN,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map(normalizeOrigin);
+
+  const defaultOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'https://shandecors.vercel.app',
+  ];
+
+  return Array.from(new Set([...configuredOrigins, ...defaultOrigins]));
+};
+
+const allowedOrigins = parseAllowedOrigins();
+
+const isOriginAllowed = (origin?: string) => {
+  if (!origin) {
+    return true;
+  }
+
+  return allowedOrigins.includes(normalizeOrigin(origin));
+};
+
+const corsOptions: cors.CorsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, origin ? normalizeOrigin(origin) : true);
+      return;
+    }
+
+    callback(new Error(`CORS origin not allowed: ${origin}`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   preflightContinue: false,
-  optionsSuccessStatus: 204
+  optionsSuccessStatus: 204,
 };
 
 console.log('🔧 CORS Configuration:', {
-  allowedOrigins: corsOptions.origin,
+  allowedOrigins,
   credentials: corsOptions.credentials,
-  methods: corsOptions.methods
+  methods: corsOptions.methods,
 });
 
 const io = new Server(server, {
-  cors: corsOptions,
+  cors: {
+    origin: allowedOrigins,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  },
 });
 
 // Rate limiting
@@ -98,8 +142,9 @@ app.get('/debug-cors', (req, res) => {
   res.status(200).json({
     message: 'CORS Debug Endpoint',
     origin: req.headers.origin,
+    allowedOrigins,
     headers: req.headers,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
 });
 

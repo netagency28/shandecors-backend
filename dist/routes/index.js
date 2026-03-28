@@ -5,21 +5,21 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const auth_1 = __importDefault(require("./auth"));
-const products_1 = __importDefault(require("./products"));
+const products_mock_1 = __importDefault(require("./products-mock")); // Use mock instead of database
 const cart_1 = __importDefault(require("./cart"));
 const orders_1 = __importDefault(require("./orders"));
 const users_1 = __importDefault(require("./users"));
 const admin_1 = __importDefault(require("./admin"));
 const upload_1 = __importDefault(require("./upload"));
 const test_1 = __importDefault(require("./test"));
-const categories_1 = __importDefault(require("./categories"));
+const categories_mock_1 = __importDefault(require("./categories-mock")); // Use mock instead of database
 const payments_1 = __importDefault(require("./payments"));
 const seed_1 = __importDefault(require("./seed"));
 const content_1 = __importDefault(require("./content"));
 const router = (0, express_1.Router)();
 router.use('/auth', auth_1.default);
-router.use('/categories', categories_1.default);
-router.use('/products', products_1.default);
+router.use('/categories', categories_mock_1.default);
+router.use('/products', products_mock_1.default);
 router.use('/cart', cart_1.default);
 router.use('/orders', orders_1.default);
 router.use('/users', users_1.default);
