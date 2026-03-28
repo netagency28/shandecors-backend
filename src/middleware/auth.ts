@@ -42,8 +42,19 @@ export const authMiddleware = async (
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
 
-    const prisma = getPrismaClient();
-    const dbUser = await prisma.user.findUnique({ where: { email: user.email } });
+    let dbUser: {
+      id: string;
+      email: string;
+      name: string | null;
+      role: string;
+    } | null = null;
+
+    try {
+      const prisma = getPrismaClient();
+      dbUser = await prisma.user.findUnique({ where: { email: user.email } });
+    } catch (dbError) {
+      console.warn('Auth middleware could not load local user profile:', dbError);
+    }
 
     req.user = {
       id: dbUser?.id || user.id,

@@ -54,6 +54,25 @@ const upsertLocalUser = async (user: { id: string; email?: string; user_metadata
   });
 };
 
+const safeUpsertLocalUser = async (user: { id: string; email?: string; user_metadata?: any }) => {
+  try {
+    return await upsertLocalUser(user);
+  } catch (error) {
+    console.warn('Skipping local user sync because database is unavailable:', error);
+    return null;
+  }
+};
+
+const buildUserResponse = (
+  user: { id: string; email?: string; user_metadata?: any },
+  localUser: { id: string; email: string; name: string | null; phone: string | null; role: string } | null,
+) => ({
+  id: localUser?.id || user.id,
+  email: user.email,
+  name: localUser?.name || user.user_metadata?.name || null,
+  role: localUser?.role || user.user_metadata?.role || 'CUSTOMER',
+});
+
 router.post('/signup', async (req, res, next) => {
   try {
     const supabase = getSupabaseClient();
@@ -74,7 +93,7 @@ router.post('/signup', async (req, res, next) => {
     }
 
     if (data.user) {
-      await upsertLocalUser(data.user);
+      await safeUpsertLocalUser(data.user);
     }
 
     return res.status(201).json({ user: data.user, session: data.session });
@@ -97,14 +116,10 @@ router.post('/signin', async (req, res, next) => {
       return res.status(401).json({ message: error?.message || 'Invalid credentials' });
     }
 
-    const localUser = await upsertLocalUser(data.user);
+    const localUser = await safeUpsertLocalUser(data.user);
 
     return res.json({
-      user: {
-        ...data.user,
-        role: localUser?.role || 'CUSTOMER',
-        name: localUser?.name || data.user.user_metadata?.name,
-      },
+      user: buildUserResponse(data.user, localUser),
       session: data.session,
     });
   } catch (error) {
@@ -128,14 +143,10 @@ router.post('/refresh', async (req, res, next) => {
       return res.status(401).json({ message: error?.message || 'Failed to refresh session' });
     }
 
-    const localUser = await upsertLocalUser(data.user);
+    const localUser = await safeUpsertLocalUser(data.user);
 
     return res.json({
-      user: {
-        ...data.user,
-        role: localUser?.role || 'CUSTOMER',
-        name: localUser?.name || data.user.user_metadata?.name,
-      },
+      user: buildUserResponse(data.user, localUser),
       session: data.session,
     });
   } catch (error) {
@@ -164,11 +175,38 @@ router.get('/me', authMiddleware, async (req: AuthenticatedRequest, res, next) =
       return res.status(401).json({ message: 'Unauthorized' });
     }
 
-    const prisma = getPrismaClient();
-    const user = await prisma.user.findUnique({ where: { email: req.user.email } });
+    let user:
+      | {
+          id: string;
+          email: string;
+          name: string | null;
+          phone: string | null;
+          role: string;
+        }
+      | null = null;
+
+    try {
+      const prisma = getPrismaClient();
+      user = await prisma.user.findUnique({ where: { email: req.user.email } });
+    } catch (dbError) {
+      console.warn('Could not read local user profile in /auth/me:', dbError);
+    }
 
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.json({
+        id: req.user.id,
+        email: req.user.email,
+        name: req.user.name || null,
+        phone: null,
+        role: req.user.role,
+        profile: {
+          id: req.user.id,
+          email: req.user.email,
+          name: req.user.name || null,
+          phone: null,
+          is_admin: req.user.role === 'ADMIN',
+        },
+      });
     }
 
     return res.json({
