@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import getPrismaClient from '../services/database';
 import { adminMiddleware, authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import { ALLOWED_CONTENT_SLUGS, readSiteContent, readSiteContentEntry, updateSiteContentEntry } from '../services/contentStore';
@@ -148,7 +149,7 @@ router.get('/dashboard', async (_req: AuthenticatedRequest, res) => {
         include: { items: true },
       }),
       prisma.order.findMany({ where: paidWhere, select: { createdAt: true, total: true } }),
-      prisma.product.findMany({ where: { isActive: true, stock: { lte: 5 } }, orderBy: { stock: 'asc' }, take: 8 }),
+      prisma.product.findMany({ where: { isActive: true, stock: { lte: 5 }, deletedAt: null }, orderBy: { stock: 'asc' }, take: 8 }),
       prisma.orderItem.groupBy({ by: ['productId'], _sum: { quantity: true }, orderBy: { _sum: { quantity: 'desc' } }, take: 5 }),
     ]);
 
@@ -210,7 +211,7 @@ router.get('/products', async (req, res) => {
     const limit = Math.min(Number(req.query.limit) || 100, 200);
     const status = typeof req.query.status === 'string' ? req.query.status : undefined;
 
-    const where: any = {};
+    const where: any = { deletedAt: null };
     if (status === 'active') where.isActive = true;
     if (status === 'inactive') where.isActive = false;
 
@@ -289,7 +290,10 @@ router.put('/products/:productId', async (req, res) => {
 router.delete('/products/:productId', async (req, res) => {
   try {
     const prisma = getPrismaClient();
-    await prisma.product.delete({ where: { id: req.params.productId } });
+    await prisma.product.update({
+      where: { id: req.params.productId },
+      data: { deletedAt: new Date() },
+    });
     return res.json({ message: 'Product deleted successfully' });
   } catch (error) {
     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to delete product' });
@@ -302,7 +306,10 @@ router.post('/products/bulk-delete', async (req, res) => {
     if (!ids.length) return res.status(400).json({ message: 'ids is required' });
 
     const prisma = getPrismaClient();
-    const result = await prisma.product.deleteMany({ where: { id: { in: ids } } });
+    const result = await prisma.product.updateMany({
+      where: { id: { in: ids } },
+      data: { deletedAt: new Date() },
+    });
     return res.json({ deleted: result.count });
   } catch (error) {
     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed bulk delete' });
@@ -514,6 +521,127 @@ router.put('/content/:slug', async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to update content page' });
+  }
+});
+
+const moderateReviewBody = z.object({
+  moderationStatus: z.enum(['APPROVED', 'REJECTED']),
+});
+
+const adminReplyBody = z.object({
+  adminReply: z.string().max(2000),
+});
+
+router.get('/reviews', async (req, res) => {
+  try {
+    const prisma = getPrismaClient();
+    const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+    const skip = (page - 1) * limit;
+
+    const where: Record<string, unknown> = {};
+    const mod = typeof req.query.moderationStatus === 'string' ? req.query.moderationStatus : '';
+    if (mod === 'PENDING' || mod === 'APPROVED' || mod === 'REJECTED') {
+      where.moderationStatus = mod;
+    }
+    if (req.query.rating) {
+      const r = parseInt(String(req.query.rating), 10);
+      if (!Number.isNaN(r)) where.rating = r;
+    }
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    if (search) {
+      where.OR = [
+        { comment: { contains: search, mode: 'insensitive' } },
+        { user: { name: { contains: search, mode: 'insensitive' } } },
+        { user: { email: { contains: search, mode: 'insensitive' } } },
+        { product: { name: { contains: search, mode: 'insensitive' } } },
+      ];
+    }
+
+    const [reviews, total] = await Promise.all([
+      prisma.review.findMany({
+        where,
+        include: {
+          user: {
+            select: { id: true, name: true, email: true },
+          },
+          product: {
+            select: { id: true, name: true, slug: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.review.count({ where }),
+    ]);
+
+    return res.json({
+      reviews,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit) || 1,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch reviews' });
+  }
+});
+
+router.put('/reviews/:reviewId/moderate', async (req, res) => {
+  try {
+    const parsed = moderateReviewBody.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: 'Invalid body', details: parsed.error.flatten() });
+    }
+
+    const prisma = getPrismaClient();
+    const { reviewId } = req.params;
+    const { moderationStatus } = parsed.data;
+
+    const updated = await prisma.review.update({
+      where: { id: reviewId },
+      data: { moderationStatus },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        product: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to update review status' });
+  }
+});
+
+router.put('/reviews/:reviewId/reply', async (req, res) => {
+  try {
+    const parsed = adminReplyBody.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: 'Invalid body', details: parsed.error.flatten() });
+    }
+
+    const prisma = getPrismaClient();
+    const { reviewId } = req.params;
+    const trimmed = parsed.data.adminReply.trim();
+
+    const updated = await prisma.review.update({
+      where: { id: reviewId },
+      data: {
+        adminReply: trimmed.length > 0 ? trimmed : null,
+        adminRepliedAt: trimmed.length > 0 ? new Date() : null,
+      },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        product: { select: { id: true, name: true, slug: true } },
+      },
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to save reply' });
   }
 });
 

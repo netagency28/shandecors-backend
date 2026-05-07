@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 
-export const ALLOWED_CONTENT_SLUGS = ['contact', 'terms', 'refunds', 'shipping'] as const;
+export const ALLOWED_CONTENT_SLUGS = ['contact', 'terms', 'refunds', 'shipping', 'privacy', 'about'] as const;
 export type ContentSlug = (typeof ALLOWED_CONTENT_SLUGS)[number];
 
 export type SiteContentEntry = {
@@ -35,6 +35,8 @@ const toSafeContent = (value: unknown): SiteContentMap => {
     terms: { ...fallbackEntry, title: 'Terms and Conditions' },
     refunds: { ...fallbackEntry, title: 'Refunds and Cancellation Policy' },
     shipping: { ...fallbackEntry, title: 'Shipping Policy' },
+    privacy: { ...fallbackEntry, title: 'Privacy Policy' },
+    about: { ...fallbackEntry, title: 'About Shan Decor' },
   };
 
   if (!value || typeof value !== 'object' || Array.isArray(value)) return defaults;

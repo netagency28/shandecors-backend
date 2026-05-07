@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import getPrismaClient from '../services/database';
 import { sendOrderStatusEmail } from '../services/email';
 
@@ -438,9 +439,94 @@ router.get('/verify/:orderId', async (req, res) => {
   }
 });
 
-router.post('/webhook', async (_req, res) => {
-  // Placeholder for production webhook signature verification and event handling.
-  return res.json({ ok: true });
+router.post('/webhook', async (req, res) => {
+  try {
+    const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
+    if (!clientSecret) {
+      console.error('Webhook received but CASHFREE_CLIENT_SECRET is not set');
+      return res.status(500).json({ error: 'Gateway not configured' });
+    }
+
+    // Verify Cashfree HMAC-SHA256 signature
+    const rawSignature = req.headers['x-webhook-signature'] as string;
+    const timestamp = req.headers['x-webhook-timestamp'] as string;
+
+    if (!rawSignature || !timestamp) {
+      return res.status(400).json({ error: 'Missing webhook signature headers' });
+    }
+
+    const body = JSON.stringify(req.body);
+    const signedPayload = `${timestamp}${body}`;
+    const expectedSignature = crypto
+      .createHmac('sha256', clientSecret)
+      .update(signedPayload)
+      .digest('base64');
+
+    if (expectedSignature !== rawSignature) {
+      console.warn('Invalid webhook signature — possible replay or spoofing attempt');
+      return res.status(400).json({ error: 'Invalid signature' });
+    }
+
+    const payload = req.body;
+    const eventType: string = payload?.type || '';
+    const cfPaymentId: string = String(payload?.data?.payment?.cf_payment_id || '');
+    const orderId: string = String(payload?.data?.order?.order_id || '');
+
+    if (!orderId) {
+      return res.status(400).json({ error: 'Missing order_id in payload' });
+    }
+
+    const prisma = getPrismaClient();
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+
+    if (!order) {
+      console.warn(`Webhook received for unknown order: ${orderId}`);
+      return res.status(200).json({ ok: true });
+    }
+
+    // Idempotency: skip if already processed
+    if (order.paymentStatus === 'COMPLETED') {
+      return res.status(200).json({ ok: true, message: 'Already processed' });
+    }
+
+    if (eventType === 'PAYMENT_SUCCESS') {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          paymentStatus: 'COMPLETED',
+          status: 'CONFIRMED',
+          paymentId: cfPaymentId || order.paymentId,
+        },
+      });
+
+      try {
+        const shippingAddress = getShippingAddress(order.shippingAddress);
+        const email = shippingAddress.email;
+        if (email) {
+          await sendOrderStatusEmail({
+            orderNumber: order.orderNumber,
+            orderId: order.id,
+            customerName: shippingAddress.full_name || '',
+            customerEmail: email,
+            total: order.total,
+            newStatus: 'CONFIRMED',
+          });
+        }
+      } catch (emailErr) {
+        console.error('Order confirmation email failed (non-fatal):', emailErr);
+      }
+    } else if (eventType === 'PAYMENT_FAILED' || eventType === 'PAYMENT_USER_DROPPED') {
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { paymentStatus: 'FAILED' },
+      });
+    }
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 export default router;

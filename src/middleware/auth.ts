@@ -69,6 +69,9 @@ export const authMiddleware = async (
   }
 };
 
+// Alias for consistency with existing code
+export const authenticateToken = authMiddleware;
+
 export const adminMiddleware = (
   req: AuthenticatedRequest,
   res: Response,

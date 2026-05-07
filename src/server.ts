@@ -5,35 +5,28 @@ import compression from 'compression';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
+import path from 'path';
 
 import { errorHandler } from './middleware/errorHandler';
-import { authMiddleware } from './middleware/auth';
 import routes from './routes';
+import { getPrismaClient, disconnectPrisma } from './services/database';
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, '..', '.env'), override: true });
 
-// Debug environment variables
-console.log('🔧 Environment Variables Debug:');
-console.log('- NODE_ENV:', process.env.NODE_ENV);
-console.log('- PORT:', process.env.PORT);
-console.log('- DATABASE_URL exists:', !!process.env.DATABASE_URL);
-console.log('- DATABASE_URL length:', process.env.DATABASE_URL?.length || 0);
-console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
+// Fail fast if required environment variables are missing
+const validateEnv = () => {
+  const required = ['DATABASE_URL', 'SUPABASE_URL', 'SUPABASE_KEY', 'FRONTEND_URL'];
+  const missing = required.filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    console.error(`❌ Missing required environment variables: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+};
 
-// Ensure DATABASE_URL is properly set
-if (!process.env.DATABASE_URL) {
-  console.error('❌ CRITICAL: DATABASE_URL is not set!');
-  console.error('❌ Make sure to set DATABASE_URL in Render environment variables!');
-  // Fallback for testing (remove this in production)
-  process.env.DATABASE_URL = "postgresql://postgres:Netagency$core@db.qkrcnxrabkmqrnlplagf.supabase.co:5432/postgres";
-  console.log('⚠️  Using fallback DATABASE_URL for testing');
-}
+validateEnv();
 
 const app = express();
-const server = createServer(app);
 
 const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '');
 
@@ -52,6 +45,8 @@ const parseAllowedOrigins = () => {
   const defaultOrigins = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
+    'https://www.shandecors.store',
+    'https://shandecors.store',
     'https://shandecors.vercel.app',
   ];
 
@@ -90,14 +85,6 @@ console.log('🔧 CORS Configuration:', {
   methods: corsOptions.methods,
 });
 
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  },
-});
-
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -115,12 +102,18 @@ app.options('*', cors(corsOptions));
 
 app.use(limiter);
 app.use(cors(corsOptions));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Health check
-app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+// Health check — verifies DB connectivity
+app.get('/health', async (_req, res) => {
+  try {
+    const prisma = getPrismaClient();
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({ status: 'ok', db: 'connected', timestamp: new Date().toISOString() });
+  } catch {
+    res.status(503).json({ status: 'degraded', db: 'disconnected', timestamp: new Date().toISOString() });
+  }
 });
 
 // Simple test endpoint (no database required)
@@ -151,23 +144,25 @@ app.get('/debug-cors', (req, res) => {
 // API routes
 app.use('/api', routes);
 
-// Socket.IO connection
-io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
-  
-  socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
-  });
-});
-
 // Error handling middleware (must be last)
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 8000;
 
-server.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
 });
 
-export { io };
+// Graceful shutdown
+const shutdown = async (signal: string) => {
+  console.log(`${signal} received — shutting down gracefully`);
+  server.close(async () => {
+    await disconnectPrisma();
+    console.log('Server shut down gracefully');
+    process.exit(0);
+  });
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

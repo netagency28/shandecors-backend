@@ -23,6 +23,8 @@ model User {
   orders    Order[]
   addresses Address[]
   cart      Cart?
+  reviews   Review[]
+  wishlists Wishlist[]
 
   @@map("users")
 }
@@ -41,6 +43,7 @@ model Address {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
   @@map("addresses")
 }
 
@@ -73,13 +76,17 @@ model Product {
   isActive    Boolean   @default(true)
   isFeatured  Boolean   @default(false)
   tags        String[]  // JSON array of tags
+  deletedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   category    Category @relation(fields: [categoryId], references: [id])
   orderItems  OrderItem[]
   cartItems   CartItem[]
+  reviews     Review[]
+  wishlists   Wishlist[]
 
+  @@index([categoryId])
   @@map("products")
 }
 
@@ -132,6 +139,9 @@ model Order {
   user  User        @relation(fields: [userId], references: [id])
   items OrderItem[]
 
+  @@index([userId])
+  @@index([status])
+  @@index([paymentStatus])
   @@map("orders")
 }
 
@@ -146,7 +156,45 @@ model OrderItem {
   order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
 
+  @@index([orderId])
+  @@index([productId])
   @@map("order_items")
+}
+
+model Review {
+  id                 String                 @id @default(cuid())
+  productId          String
+  userId             String
+  rating             Int // 1-5 stars
+  comment            String?
+  isVerified         Boolean                @default(false) // Verified purchase
+  isActive           Boolean                @default(true)
+  moderationStatus   ReviewModerationStatus @default(PENDING)
+  adminReply         String?
+  adminRepliedAt     DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, userId])
+  @@index([productId])
+  @@index([userId])
+  @@map("reviews")
+}
+
+model Wishlist {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@map("wishlists")
 }
 
 enum UserRole {
@@ -170,4 +218,10 @@ enum PaymentStatus {
   COMPLETED
   FAILED
   REFUNDED
+}
+
+enum ReviewModerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }

@@ -139,6 +139,146 @@ router.post('/', async (_req, res) => {
       });
     }
 
+    // Categories + products aligned with the former storefront mock (stable slugs / SKUs for reviews, wishlist, cart FKs)
+    const showcaseCategories = [
+      {
+        name: 'Wall Decor',
+        slug: 'wall-decor',
+        description: 'Beautiful wall decorations and art pieces',
+        image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&w=1200&q=80',
+      },
+      {
+        name: 'Lighting',
+        slug: 'lighting',
+        description: 'Modern lighting solutions',
+        image: 'https://images.unsplash.com/photo-1513506003789-5e024b9c5b32?auto=format&fit=crop&w=1200&q=80',
+      },
+      {
+        name: 'Furniture',
+        slug: 'furniture',
+        description: 'Contemporary furniture pieces',
+        image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?auto=format&fit=crop&w=1200&q=80',
+      },
+    ];
+
+    for (const category of showcaseCategories) {
+      await prisma.category.upsert({
+        where: { slug: category.slug },
+        create: { ...category, isActive: true },
+        update: {
+          description: category.description,
+          image: category.image,
+          isActive: true,
+        },
+      });
+    }
+
+    const categoriesAll = await prisma.category.findMany();
+    const bySlugAll = new Map(categoriesAll.map((c) => [c.slug, c.id]));
+
+    const showcaseProducts: Array<{
+      slug: string;
+      name: string;
+      description: string;
+      price: number;
+      comparePrice: number | null;
+      sku: string;
+      stock: number;
+      categorySlug: string;
+      featured: boolean;
+      images: string[];
+      tags: string[];
+    }> = [
+      {
+        slug: 'modern-wall-clock',
+        name: 'Modern Wall Clock',
+        description: 'A sleek contemporary wall clock',
+        price: 2999,
+        comparePrice: 2499,
+        sku: 'WC-001',
+        stock: 15,
+        categorySlug: 'wall-decor',
+        featured: true,
+        images: ['https://images.unsplash.com/photo-1608198093002-ad4a00b6b5c5?w=400'],
+        tags: ['modern', 'clock', 'wall'],
+      },
+      {
+        slug: 'abstract-wall-art',
+        name: 'Abstract Wall Art',
+        description: 'Beautiful abstract painting for modern spaces',
+        price: 5999,
+        comparePrice: null,
+        sku: 'WA-002',
+        stock: 8,
+        categorySlug: 'wall-decor',
+        featured: true,
+        images: ['https://images.unsplash.com/photo-1541961017774-22349e4a1262?w=400'],
+        tags: ['abstract', 'art', 'painting'],
+      },
+      {
+        slug: 'minimalist-vase',
+        name: 'Minimalist Vase',
+        description: 'Simple elegant vase for modern decor',
+        price: 1899,
+        comparePrice: 1599,
+        sku: 'MV-003',
+        stock: 20,
+        categorySlug: 'accessories',
+        featured: false,
+        images: ['https://images.unsplash.com/photo-1528629934191-3d609f4c623b?w=400'],
+        tags: ['minimalist', 'vase', 'decor'],
+      },
+      {
+        slug: 'decorative-mirror',
+        name: 'Decorative Mirror',
+        description: 'Elegant mirror with ornate frame',
+        price: 8999,
+        comparePrice: null,
+        sku: 'DM-004',
+        stock: 5,
+        categorySlug: 'wall-decor',
+        featured: true,
+        images: ['https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=400'],
+        tags: ['mirror', 'wall', 'elegant'],
+      },
+    ];
+
+    for (const p of showcaseProducts) {
+      const categoryId = bySlugAll.get(p.categorySlug);
+      if (!categoryId) continue;
+
+      await prisma.product.upsert({
+        where: { slug: p.slug },
+        create: {
+          name: p.name,
+          slug: p.slug,
+          description: p.description,
+          price: p.price,
+          comparePrice: p.comparePrice,
+          sku: p.sku,
+          stock: p.stock,
+          images: p.images,
+          categoryId,
+          isActive: true,
+          isFeatured: p.featured,
+          tags: p.tags,
+        },
+        update: {
+          name: p.name,
+          description: p.description,
+          price: p.price,
+          comparePrice: p.comparePrice,
+          sku: p.sku,
+          stock: p.stock,
+          images: p.images,
+          categoryId,
+          isFeatured: p.featured,
+          isActive: true,
+          tags: p.tags,
+        },
+      });
+    }
+
     const [categoriesCount, productsCount] = await Promise.all([
       prisma.category.count(),
       prisma.product.count(),

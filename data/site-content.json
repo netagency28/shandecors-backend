@@ -18,5 +18,15 @@
     "title": "Shipping Policy",
     "body": "We currently ship across India. Shipping timelines depend on destination and product availability. Typical dispatch time is 1-3 business days, and delivery is usually completed in 3-8 business days.\n\nShipping charges (if applicable) are shown during checkout. Delays due to weather, courier issues, or force majeure are outside our control.\n\nFor large or fragile decor items, additional handling time may apply.",
     "updated_at": "2026-03-21T00:00:00.000Z"
+  },
+  "privacy": {
+    "title": "Privacy Policy",
+    "body": "Shan Decor is committed to protecting your personal information. We collect your name, email, and order details to process purchases. Your data is shared only with Cashfree (payments), Supabase (infrastructure), and Resend (email) to fulfil orders. We do not sell your data. For data access, correction, or deletion requests, contact support@shandecor.in. Grievance Officer: support@shandecor.in (response within 30 days).",
+    "updated_at": "2026-05-07T00:00:00.000Z"
+  },
+  "about": {
+    "title": "About Shan Decor",
+    "body": "Shan Decor is a curated home décor brand bringing timeless, handcrafted pieces to modern Indian homes. We believe that thoughtful design transforms spaces and lives. Each piece in our collection is chosen for its craftsmanship, quality, and character.\n\nOur mission is to make beautiful living accessible — whether you're decorating a new home or refreshing a beloved space.",
+    "updated_at": "2026-05-07T00:00:00.000Z"
   }
 }
