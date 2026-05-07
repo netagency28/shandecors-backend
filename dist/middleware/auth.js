@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.adminMiddleware = exports.authMiddleware = void 0;
+exports.adminMiddleware = exports.authenticateToken = exports.authMiddleware = void 0;
 const supabase_js_1 = require("@supabase/supabase-js");
 const database_1 = __importDefault(require("../services/database"));
 const getSupabaseClient = () => {
@@ -45,6 +45,8 @@ const authMiddleware = async (req, res, next) => {
     }
 };
 exports.authMiddleware = authMiddleware;
+// Alias for consistency with existing code
+exports.authenticateToken = exports.authMiddleware;
 const adminMiddleware = (req, res, next) => {
     if (!req.user || req.user.role !== 'ADMIN') {
         return res.status(403).json({ message: 'Admin access required' });

@@ -5,16 +5,25 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const zod_1 = require("zod");
-const supabase_js_1 = require("@supabase/supabase-js");
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
+const auth_service_1 = require("../services/auth-service");
 const router = (0, express_1.Router)();
-const getSupabaseClient = () => {
-    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-        throw new Error('SUPABASE_URL and SUPABASE_KEY environment variables are required');
-    }
-    return (0, supabase_js_1.createClient)(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-};
+const strictAuthLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: 'Too many attempts. Please try again in 15 minutes.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+const resetPasswordLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    message: { error: 'Too many password reset requests. Please try again in an hour.' },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
 const signUpSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     password: zod_1.z.string().min(6),
@@ -23,6 +32,9 @@ const signUpSchema = zod_1.z.object({
 const signInSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     password: zod_1.z.string(),
+});
+const resetPasswordSchema = zod_1.z.object({
+    email: zod_1.z.string().email(),
 });
 const profileSchema = zod_1.z.object({
     name: zod_1.z.string().trim().min(1).optional(),
@@ -64,22 +76,10 @@ const buildUserResponse = (user, localUser) => ({
     name: localUser?.name || user.user_metadata?.name || null,
     role: localUser?.role || user.user_metadata?.role || 'CUSTOMER',
 });
-router.post('/signup', async (req, res, next) => {
+router.post('/signup', strictAuthLimiter, async (req, res, next) => {
     try {
-        const supabase = getSupabaseClient();
         const validatedData = signUpSchema.parse(req.body);
-        const { data, error } = await supabase.auth.signUp({
-            email: validatedData.email,
-            password: validatedData.password,
-            options: {
-                data: {
-                    name: validatedData.name,
-                },
-            },
-        });
-        if (error) {
-            return res.status(400).json({ message: error.message });
-        }
+        const data = await auth_service_1.authService.signUp(validatedData.email, validatedData.password, validatedData.name);
         if (data.user) {
             await safeUpsertLocalUser(data.user);
         }
@@ -89,16 +89,12 @@ router.post('/signup', async (req, res, next) => {
         return next(error);
     }
 });
-router.post('/signin', async (req, res, next) => {
+router.post('/signin', strictAuthLimiter, async (req, res, next) => {
     try {
-        const supabase = getSupabaseClient();
         const validatedData = signInSchema.parse(req.body);
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email: validatedData.email,
-            password: validatedData.password,
-        });
-        if (error || !data.user) {
-            return res.status(401).json({ message: error?.message || 'Invalid credentials' });
+        const data = await auth_service_1.authService.signIn(validatedData.email, validatedData.password);
+        if (!data.user) {
+            return res.status(401).json({ message: 'Invalid credentials' });
         }
         const localUser = await safeUpsertLocalUser(data.user);
         return res.json({
@@ -116,7 +112,7 @@ router.post('/refresh', async (req, res, next) => {
         if (!refreshToken) {
             return res.status(400).json({ message: 'refresh_token is required' });
         }
-        const supabase = getSupabaseClient();
+        const supabase = (0, auth_service_1.getSupabaseClient)();
         const { data, error } = await supabase.auth.refreshSession({
             refresh_token: refreshToken,
         });
@@ -135,7 +131,7 @@ router.post('/refresh', async (req, res, next) => {
 });
 router.post('/signout', async (req, res, next) => {
     try {
-        const supabase = getSupabaseClient();
+        const supabase = (0, auth_service_1.getSupabaseClient)();
         const { error } = await supabase.auth.signOut();
         if (error) {
             return res.status(400).json({ message: error.message });
@@ -219,6 +215,21 @@ router.post('/profile', auth_1.authMiddleware, async (req, res, next) => {
     }
     catch (error) {
         return next(error);
+    }
+});
+// Reset password
+router.post('/reset-password', resetPasswordLimiter, async (req, res) => {
+    try {
+        const validatedData = resetPasswordSchema.parse(req.body);
+        await auth_service_1.authService.resetPasswordForEmail(validatedData.email);
+        res.json({ message: 'Password reset link sent successfully' });
+    }
+    catch (error) {
+        console.error('Reset password error:', error);
+        if (error instanceof zod_1.z.ZodError) {
+            return res.status(400).json({ error: 'Invalid input', details: error.errors });
+        }
+        res.status(500).json({ error: 'Failed to send reset link' });
     }
 });
 exports.default = router;

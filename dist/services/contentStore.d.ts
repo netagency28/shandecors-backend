@@ -1,4 +1,4 @@
-export declare const ALLOWED_CONTENT_SLUGS: readonly ["contact", "terms", "refunds", "shipping"];
+export declare const ALLOWED_CONTENT_SLUGS: readonly ["contact", "terms", "refunds", "shipping", "privacy", "about"];
 export type ContentSlug = (typeof ALLOWED_CONTENT_SLUGS)[number];
 export type SiteContentEntry = {
     title: string;

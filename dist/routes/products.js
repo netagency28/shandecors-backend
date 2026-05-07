@@ -39,7 +39,7 @@ router.get('/', async (req, res) => {
         const featured = req.query.featured === 'true';
         const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
         const category = typeof req.query.category === 'string' ? req.query.category : undefined;
-        const andFilters = [{ isActive: true }];
+        const andFilters = [{ isActive: true }, { deletedAt: null }];
         if (featured)
             andFilters.push({ isFeatured: true });
         if (search) {
@@ -81,8 +81,8 @@ router.get('/', async (req, res) => {
 router.get('/id/:id', async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
-        const product = await prisma.product.findUnique({
-            where: { id: req.params.id },
+        const product = await prisma.product.findFirst({
+            where: { id: req.params.id, deletedAt: null },
             include: { category: true },
         });
         if (!product) {
@@ -97,8 +97,8 @@ router.get('/id/:id', async (req, res) => {
 router.get('/:slug', async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
-        const product = await prisma.product.findUnique({
-            where: { slug: req.params.slug },
+        const product = await prisma.product.findFirst({
+            where: { slug: req.params.slug, deletedAt: null },
             include: { category: true },
         });
         if (!product) {

@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.updateSiteContentEntry = exports.readSiteContentEntry = exports.writeSiteContent = exports.readSiteContent = exports.ALLOWED_CONTENT_SLUGS = void 0;
 const fs_1 = require("fs");
 const path_1 = __importDefault(require("path"));
-exports.ALLOWED_CONTENT_SLUGS = ['contact', 'terms', 'refunds', 'shipping'];
+exports.ALLOWED_CONTENT_SLUGS = ['contact', 'terms', 'refunds', 'shipping', 'privacy', 'about'];
 const CONTENT_PATH = path_1.default.join(process.cwd(), 'data', 'site-content.json');
 const isValidSlug = (slug) => exports.ALLOWED_CONTENT_SLUGS.includes(slug);
 const isValidEntry = (value) => {
@@ -26,6 +26,8 @@ const toSafeContent = (value) => {
         terms: { ...fallbackEntry, title: 'Terms and Conditions' },
         refunds: { ...fallbackEntry, title: 'Refunds and Cancellation Policy' },
         shipping: { ...fallbackEntry, title: 'Shipping Policy' },
+        privacy: { ...fallbackEntry, title: 'Privacy Policy' },
+        about: { ...fallbackEntry, title: 'About Shan Decor' },
     };
     if (!value || typeof value !== 'object' || Array.isArray(value))
         return defaults;

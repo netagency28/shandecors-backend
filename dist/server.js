@@ -3,7 +3,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.io = void 0;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
@@ -11,29 +10,23 @@ const compression_1 = __importDefault(require("compression"));
 const morgan_1 = __importDefault(require("morgan"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const dotenv_1 = __importDefault(require("dotenv"));
-const http_1 = require("http");
-const socket_io_1 = require("socket.io");
+const path_1 = __importDefault(require("path"));
 const errorHandler_1 = require("./middleware/errorHandler");
 const routes_1 = __importDefault(require("./routes"));
+const database_1 = require("./services/database");
 // Load environment variables
-dotenv_1.default.config();
-// Debug environment variables
-console.log('🔧 Environment Variables Debug:');
-console.log('- NODE_ENV:', process.env.NODE_ENV);
-console.log('- PORT:', process.env.PORT);
-console.log('- DATABASE_URL exists:', !!process.env.DATABASE_URL);
-console.log('- DATABASE_URL length:', process.env.DATABASE_URL?.length || 0);
-console.log('- FRONTEND_URL:', process.env.FRONTEND_URL);
-// Ensure DATABASE_URL is properly set
-if (!process.env.DATABASE_URL) {
-    console.error('❌ CRITICAL: DATABASE_URL is not set!');
-    console.error('❌ Make sure to set DATABASE_URL in Render environment variables!');
-    // Fallback for testing (remove this in production)
-    process.env.DATABASE_URL = "postgresql://postgres:Netagency$core@db.qkrcnxrabkmqrnlplagf.supabase.co:5432/postgres";
-    console.log('⚠️  Using fallback DATABASE_URL for testing');
-}
+dotenv_1.default.config({ path: path_1.default.join(__dirname, '..', '.env'), override: true });
+// Fail fast if required environment variables are missing
+const validateEnv = () => {
+    const required = ['DATABASE_URL', 'SUPABASE_URL', 'SUPABASE_KEY', 'FRONTEND_URL'];
+    const missing = required.filter((key) => !process.env[key]);
+    if (missing.length > 0) {
+        console.error(`❌ Missing required environment variables: ${missing.join(', ')}`);
+        process.exit(1);
+    }
+};
+validateEnv();
 const app = (0, express_1.default)();
-const server = (0, http_1.createServer)(app);
 const normalizeOrigin = (origin) => origin.trim().replace(/\/+$/, '');
 const parseAllowedOrigins = () => {
     const configuredOrigins = [
@@ -49,6 +42,8 @@ const parseAllowedOrigins = () => {
     const defaultOrigins = [
         'http://localhost:3000',
         'http://127.0.0.1:3000',
+        'https://www.shandecors.store',
+        'https://shandecors.store',
         'https://shandecors.vercel.app',
     ];
     return Array.from(new Set([...configuredOrigins, ...defaultOrigins]));
@@ -79,14 +74,6 @@ console.log('🔧 CORS Configuration:', {
     credentials: corsOptions.credentials,
     methods: corsOptions.methods,
 });
-const io = new socket_io_1.Server(server, {
-    cors: {
-        origin: allowedOrigins,
-        credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    },
-});
-exports.io = io;
 // Rate limiting
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -101,11 +88,18 @@ app.use((0, morgan_1.default)('combined'));
 app.options('*', (0, cors_1.default)(corsOptions));
 app.use(limiter);
 app.use((0, cors_1.default)(corsOptions));
-app.use(express_1.default.json({ limit: '10mb' }));
+app.use(express_1.default.json({ limit: '1mb' }));
 app.use(express_1.default.urlencoded({ extended: true }));
-// Health check
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+// Health check — verifies DB connectivity
+app.get('/health', async (_req, res) => {
+    try {
+        const prisma = (0, database_1.getPrismaClient)();
+        await prisma.$queryRaw `SELECT 1`;
+        res.status(200).json({ status: 'ok', db: 'connected', timestamp: new Date().toISOString() });
+    }
+    catch {
+        res.status(503).json({ status: 'degraded', db: 'disconnected', timestamp: new Date().toISOString() });
+    }
 });
 // Simple test endpoint (no database required)
 app.get('/test', (req, res) => {
@@ -132,18 +126,22 @@ app.get('/debug-cors', (req, res) => {
 });
 // API routes
 app.use('/api', routes_1.default);
-// Socket.IO connection
-io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
-    socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
-    });
-});
 // Error handling middleware (must be last)
 app.use(errorHandler_1.errorHandler);
 const PORT = process.env.PORT || 8000;
-server.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📊 Health check: http://localhost:${PORT}/health`);
 });
+// Graceful shutdown
+const shutdown = async (signal) => {
+    console.log(`${signal} received — shutting down gracefully`);
+    server.close(async () => {
+        await (0, database_1.disconnectPrisma)();
+        console.log('Server shut down gracefully');
+        process.exit(0);
+    });
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 //# sourceMappingURL=server.js.map

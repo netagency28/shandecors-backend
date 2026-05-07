@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const crypto_1 = __importDefault(require("crypto"));
 const database_1 = __importDefault(require("../services/database"));
 const email_1 = require("../services/email");
 const router = (0, express_1.Router)();
@@ -385,9 +386,85 @@ router.get('/verify/:orderId', async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to verify payment' });
     }
 });
-router.post('/webhook', async (_req, res) => {
-    // Placeholder for production webhook signature verification and event handling.
-    return res.json({ ok: true });
+router.post('/webhook', async (req, res) => {
+    try {
+        const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
+        if (!clientSecret) {
+            console.error('Webhook received but CASHFREE_CLIENT_SECRET is not set');
+            return res.status(500).json({ error: 'Gateway not configured' });
+        }
+        // Verify Cashfree HMAC-SHA256 signature
+        const rawSignature = req.headers['x-webhook-signature'];
+        const timestamp = req.headers['x-webhook-timestamp'];
+        if (!rawSignature || !timestamp) {
+            return res.status(400).json({ error: 'Missing webhook signature headers' });
+        }
+        const body = JSON.stringify(req.body);
+        const signedPayload = `${timestamp}${body}`;
+        const expectedSignature = crypto_1.default
+            .createHmac('sha256', clientSecret)
+            .update(signedPayload)
+            .digest('base64');
+        if (expectedSignature !== rawSignature) {
+            console.warn('Invalid webhook signature — possible replay or spoofing attempt');
+            return res.status(400).json({ error: 'Invalid signature' });
+        }
+        const payload = req.body;
+        const eventType = payload?.type || '';
+        const cfPaymentId = String(payload?.data?.payment?.cf_payment_id || '');
+        const orderId = String(payload?.data?.order?.order_id || '');
+        if (!orderId) {
+            return res.status(400).json({ error: 'Missing order_id in payload' });
+        }
+        const prisma = (0, database_1.default)();
+        const order = await prisma.order.findUnique({ where: { id: orderId } });
+        if (!order) {
+            console.warn(`Webhook received for unknown order: ${orderId}`);
+            return res.status(200).json({ ok: true });
+        }
+        // Idempotency: skip if already processed
+        if (order.paymentStatus === 'COMPLETED') {
+            return res.status(200).json({ ok: true, message: 'Already processed' });
+        }
+        if (eventType === 'PAYMENT_SUCCESS') {
+            await prisma.order.update({
+                where: { id: orderId },
+                data: {
+                    paymentStatus: 'COMPLETED',
+                    status: 'CONFIRMED',
+                    paymentId: cfPaymentId || order.paymentId,
+                },
+            });
+            try {
+                const shippingAddress = getShippingAddress(order.shippingAddress);
+                const email = shippingAddress.email;
+                if (email) {
+                    await (0, email_1.sendOrderStatusEmail)({
+                        orderNumber: order.orderNumber,
+                        orderId: order.id,
+                        customerName: shippingAddress.full_name || '',
+                        customerEmail: email,
+                        total: order.total,
+                        newStatus: 'CONFIRMED',
+                    });
+                }
+            }
+            catch (emailErr) {
+                console.error('Order confirmation email failed (non-fatal):', emailErr);
+            }
+        }
+        else if (eventType === 'PAYMENT_FAILED' || eventType === 'PAYMENT_USER_DROPPED') {
+            await prisma.order.update({
+                where: { id: orderId },
+                data: { paymentStatus: 'FAILED' },
+            });
+        }
+        return res.status(200).json({ ok: true });
+    }
+    catch (error) {
+        console.error('Webhook processing error:', error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
 });
 exports.default = router;
 //# sourceMappingURL=payments.js.map
