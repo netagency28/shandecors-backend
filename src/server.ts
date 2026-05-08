@@ -85,6 +85,9 @@ console.log('🔧 CORS Configuration:', {
   methods: corsOptions.methods,
 });
 
+// Trust Render's reverse proxy so rate limiting uses the real client IP
+app.set('trust proxy', 1);
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
