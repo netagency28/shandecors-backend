@@ -470,6 +470,83 @@ router.put('/users/:id/role', async (req: AuthenticatedRequest, res) => {
   }
 });
 
+const updateUserSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  role: z.enum(['CUSTOMER', 'ADMIN']).optional(),
+});
+
+router.put('/users/:id', async (req: AuthenticatedRequest, res) => {
+  try {
+    const parsed = updateUserSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: 'Invalid input', details: parsed.error.flatten() });
+    }
+
+    const prisma = getPrismaClient();
+    const { id } = req.params;
+    const { name, role } = parsed.data;
+
+    // Prevent demoting yourself if you're the only admin
+    if (role === 'CUSTOMER' && req.user!.id === id) {
+      const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
+      if (adminCount <= 1) {
+        return res.status(400).json({ message: 'Cannot demote the only admin account.' });
+      }
+    }
+
+    const updated = await prisma.user.update({
+      where: { id },
+      data: {
+        ...(name !== undefined ? { name } : {}),
+        ...(role !== undefined ? { role } : {}),
+      },
+      select: { id: true, email: true, name: true, role: true, createdAt: true },
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to update user' });
+  }
+});
+
+router.delete('/users/:id', async (req: AuthenticatedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const requestingUserId = req.user!.id;
+
+    if (id === requestingUserId) {
+      return res.status(400).json({ message: 'You cannot delete your own account.' });
+    }
+
+    const prisma = getPrismaClient();
+
+    const target = await prisma.user.findUnique({
+      where: { id },
+      select: { id: true, role: true, _count: { select: { orders: true } } },
+    });
+
+    if (!target) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    if ((target._count?.orders ?? 0) > 0) {
+      return res.status(400).json({ message: 'Cannot delete a user who has placed orders.' });
+    }
+
+    if (target.role === 'ADMIN') {
+      const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
+      if (adminCount <= 1) {
+        return res.status(400).json({ message: 'Cannot delete the only admin account.' });
+      }
+    }
+
+    await prisma.user.delete({ where: { id } });
+    return res.json({ message: 'User deleted successfully.' });
+  } catch (error) {
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to delete user' });
+  }
+});
+
 router.get('/content', async (_req, res) => {
   try {
     const content = await readSiteContent();
