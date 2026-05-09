@@ -42,9 +42,8 @@ const parseAllowedOrigins = () => {
     const defaultOrigins = [
         'http://localhost:3000',
         'http://127.0.0.1:3000',
-        'https://www.shandecors.store',
         'https://shandecors.store',
-        'https://shandecors.vercel.app',
+        'https://www.shandecors.store',
     ];
     return Array.from(new Set([...configuredOrigins, ...defaultOrigins]));
 };
@@ -74,6 +73,8 @@ console.log('🔧 CORS Configuration:', {
     credentials: corsOptions.credentials,
     methods: corsOptions.methods,
 });
+// Trust Render's reverse proxy so rate limiting uses the real client IP
+app.set('trust proxy', 1);
 // Rate limiting
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -84,13 +85,7 @@ const limiter = (0, express_rate_limit_1.default)({
 app.use((0, helmet_1.default)());
 app.use((0, compression_1.default)());
 app.use((0, morgan_1.default)('combined'));
-// Explicit preflight handler
-app.options('*', (0, cors_1.default)(corsOptions));
-app.use(limiter);
-app.use((0, cors_1.default)(corsOptions));
-app.use(express_1.default.json({ limit: '1mb' }));
-app.use(express_1.default.urlencoded({ extended: true }));
-// Health check — verifies DB connectivity
+// Health check must be before rate limiter — Render pings every 5s and would exhaust the limit
 app.get('/health', async (_req, res) => {
     try {
         const prisma = (0, database_1.getPrismaClient)();
@@ -101,6 +96,12 @@ app.get('/health', async (_req, res) => {
         res.status(503).json({ status: 'degraded', db: 'disconnected', timestamp: new Date().toISOString() });
     }
 });
+// Explicit preflight handler
+app.options('*', (0, cors_1.default)(corsOptions));
+app.use(limiter);
+app.use((0, cors_1.default)(corsOptions));
+app.use(express_1.default.json({ limit: '1mb' }));
+app.use(express_1.default.urlencoded({ extended: true }));
 // Simple test endpoint (no database required)
 app.get('/test', (req, res) => {
     res.status(200).json({

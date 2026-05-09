@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { ALLOWED_CONTENT_SLUGS, readSiteContentEntry } from '../services/contentStore';
+import { sendContactAcknowledgementEmail } from '../services/email';
 
 const router = Router();
 const CONTACT_INQUIRIES_PATH = path.join(process.cwd(), 'data', 'contact-inquiries.json');
@@ -59,6 +60,10 @@ router.post('/contact-inquiry', async (req, res) => {
     const rows = await readInquiries();
     rows.unshift(inquiry);
     await writeInquiries(rows.slice(0, 1000));
+
+    sendContactAcknowledgementEmail(name, email).catch((err) =>
+      console.error('Contact acknowledgement email failed:', err),
+    );
 
     return res.status(201).json({ message: 'Your message has been sent successfully.' });
   } catch (error) {

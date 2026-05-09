@@ -7,6 +7,7 @@ const express_1 = require("express");
 const fs_1 = require("fs");
 const path_1 = __importDefault(require("path"));
 const contentStore_1 = require("../services/contentStore");
+const email_1 = require("../services/email");
 const router = (0, express_1.Router)();
 const CONTACT_INQUIRIES_PATH = path_1.default.join(process.cwd(), 'data', 'contact-inquiries.json');
 const readInquiries = async () => {
@@ -48,6 +49,7 @@ router.post('/contact-inquiry', async (req, res) => {
         const rows = await readInquiries();
         rows.unshift(inquiry);
         await writeInquiries(rows.slice(0, 1000));
+        (0, email_1.sendContactAcknowledgementEmail)(name, email).catch((err) => console.error('Contact acknowledgement email failed:', err));
         return res.status(201).json({ message: 'Your message has been sent successfully.' });
     }
     catch (error) {
