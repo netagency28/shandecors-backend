@@ -1,106 +1,125 @@
 "use strict";
+/**
+ * StorageService — S3-compatible file storage (Backblaze B2 / AWS / Cloudflare R2 / DO Spaces)
+ *
+ * Folder structure:
+ *   products/images/{ts}-{name}   ← product images
+ *   products/videos/{ts}-{name}   ← product videos
+ *   categories/{ts}-{name}        ← category images
+ *   users/{ts}-{name}             ← user avatars
+ *   site/{ts}-{name}              ← general assets
+ *
+ * Required env vars:
+ *   S3_ENDPOINT        e.g. https://s3.us-west-004.backblazeb2.com
+ *   S3_REGION          e.g. us-west-004
+ *   S3_ACCESS_KEY_ID
+ *   S3_SECRET_ACCESS_KEY
+ *   S3_BUCKET          bucket name
+ *   S3_PUBLIC_URL      base URL for public file access
+ *                      e.g. https://my-bucket.s3.us-west-004.backblazeb2.com
+ */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getStorageService = void 0;
-const supabase_js_1 = require("@supabase/supabase-js");
-class StorageService {
+exports.buildStoragePath = buildStoragePath;
+const client_s3_1 = require("@aws-sdk/client-s3");
+const lib_storage_1 = require("@aws-sdk/lib-storage");
+const VIDEO_MIME = /^video\//;
+/** Derive a clean storage path from upload context and file metadata. */
+function buildStoragePath(type, originalName, mimeType) {
+    const ts = Date.now();
+    const safe = originalName
+        .toLowerCase()
+        .replace(/[^a-z0-9._-]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 80);
+    switch (type) {
+        case 'video':
+            return `products/videos/${ts}-${safe}`;
+        case 'product':
+            return VIDEO_MIME.test(mimeType)
+                ? `products/videos/${ts}-${safe}`
+                : `products/images/${ts}-${safe}`;
+        case 'category':
+            return `categories/${ts}-${safe}`;
+        case 'user':
+            return `users/${ts}-${safe}`;
+        default:
+            return `site/${ts}-${safe}`;
+    }
+}
+class S3StorageService {
     constructor() {
-        this.bucketReady = false;
-        if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-            throw new Error('SUPABASE_URL and SUPABASE_KEY are required for StorageService');
+        const endpoint = process.env.S3_ENDPOINT;
+        const region = process.env.S3_REGION;
+        const accessKeyId = process.env.S3_ACCESS_KEY_ID;
+        const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY;
+        const bucket = process.env.S3_BUCKET;
+        const publicUrl = process.env.S3_PUBLIC_URL;
+        if (!endpoint || !region || !accessKeyId || !secretAccessKey || !bucket || !publicUrl) {
+            throw new Error('Missing S3 config. Required: S3_ENDPOINT, S3_REGION, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET, S3_PUBLIC_URL');
         }
-        this.supabase = (0, supabase_js_1.createClient)(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-        this.bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'uploads';
+        this.bucket = bucket;
+        this.publicUrl = publicUrl.replace(/\/+$/, '');
+        this.client = new client_s3_1.S3Client({
+            endpoint,
+            region,
+            credentials: { accessKeyId, secretAccessKey },
+            // Required for path-style URLs (Backblaze B2, MinIO, etc.)
+            forcePathStyle: true,
+        });
     }
-    /** Create the bucket if it doesn't exist — called once before the first upload. */
-    async ensureBucket() {
-        if (this.bucketReady)
-            return;
-        const { data: buckets, error: listErr } = await this.supabase.storage.listBuckets();
-        if (listErr) {
-            console.warn('⚠️  Could not list Supabase buckets:', listErr.message);
-            return;
-        }
-        const exists = (buckets ?? []).some((b) => b.name === this.bucketName);
-        if (!exists) {
-            const { error: createErr } = await this.supabase.storage.createBucket(this.bucketName, {
-                public: true,
-                allowedMimeTypes: [
-                    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-                    'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/ogg',
-                ],
-                fileSizeLimit: 100 * 1024 * 1024, // 100 MB
-            });
-            if (createErr) {
-                console.warn(`⚠️  Could not create bucket "${this.bucketName}":`, createErr.message);
-                return;
-            }
-            console.log(`✅ Supabase bucket "${this.bucketName}" created (public).`);
-        }
-        this.bucketReady = true;
-    }
-    async uploadFile(file, fileName, contentType, path = '') {
+    async uploadFile(file, storagePath, contentType) {
         try {
-            await this.ensureBucket();
-            const filePath = path ? `${path}/${fileName}` : fileName;
-            const { error } = await this.supabase.storage
-                .from(this.bucketName)
-                .upload(filePath, file, {
-                contentType,
-                cacheControl: '3600',
-                upsert: true,
+            // Use multipart upload via lib-storage — handles large files automatically
+            const parallelUpload = new lib_storage_1.Upload({
+                client: this.client,
+                params: {
+                    Bucket: this.bucket,
+                    Key: storagePath,
+                    Body: file,
+                    ContentType: contentType,
+                    CacheControl: 'public, max-age=31536000',
+                },
             });
-            if (error) {
-                return { url: '', path: '', error: error.message };
-            }
-            const { data: { publicUrl } } = this.supabase.storage
-                .from(this.bucketName)
-                .getPublicUrl(filePath);
-            return { url: publicUrl, path: filePath };
+            await parallelUpload.done();
+            return {
+                url: `${this.publicUrl}/${storagePath}`,
+                path: storagePath,
+            };
         }
-        catch (error) {
+        catch (err) {
             return {
                 url: '',
                 path: '',
-                error: error instanceof Error ? error.message : 'Upload failed',
+                error: err instanceof Error ? err.message : 'Upload failed',
             };
         }
     }
-    async deleteFile(filePath) {
+    async deleteFile(storagePath) {
         try {
-            const { error } = await this.supabase.storage
-                .from(this.bucketName)
-                .remove([filePath]);
-            if (error)
-                return { success: false, error: error.message };
+            await this.client.send(new client_s3_1.DeleteObjectCommand({ Bucket: this.bucket, Key: storagePath }));
             return { success: true };
         }
-        catch (error) {
+        catch (err) {
             return {
                 success: false,
-                error: error instanceof Error ? error.message : 'Delete failed',
+                error: err instanceof Error ? err.message : 'Delete failed',
             };
         }
     }
-    getPublicUrl(filePath) {
-        const { data: { publicUrl } } = this.supabase.storage
-            .from(this.bucketName)
-            .getPublicUrl(filePath);
-        return publicUrl;
+    getPublicUrl(storagePath) {
+        return `${this.publicUrl}/${storagePath}`;
     }
-    async listFiles(path = '') {
+    async listFiles(prefix = '') {
         try {
-            const { data, error } = await this.supabase.storage
-                .from(this.bucketName)
-                .list(path);
-            if (error)
-                return { files: [], error: error.message };
-            const files = data?.map((file) => file.name) || [];
+            const resp = await this.client.send(new client_s3_1.ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix }));
+            const files = (resp.Contents ?? []).map((o) => o.Key ?? '').filter(Boolean);
             return { files };
         }
-        catch (error) {
+        catch (err) {
             return {
                 files: [],
-                error: error instanceof Error ? error.message : 'List failed',
+                error: err instanceof Error ? err.message : 'List failed',
             };
         }
     }
@@ -108,7 +127,7 @@ class StorageService {
 let storageService = null;
 const getStorageService = () => {
     if (!storageService) {
-        storageService = new StorageService();
+        storageService = new S3StorageService();
     }
     return storageService;
 };
