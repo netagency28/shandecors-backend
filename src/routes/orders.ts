@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import getPrismaClient from '../services/database';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
-import { sendOrderPlacedEmail } from '../services/email';
 
 const router = Router();
 
@@ -141,19 +140,6 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
       include: { items: true, user: true },
     });
 
-    const shipping = getShippingAddress(created.shippingAddress);
-    const customerEmail = getString(created.user?.email) || getString(shipping.email);
-    if (customerEmail) {
-      await sendOrderPlacedEmail({
-        orderId: created.id,
-        orderNumber: created.orderNumber,
-        customerName: getString(created.user?.name) || getString(shipping.full_name) || 'Customer',
-        customerEmail,
-        total: Number(created.total || 0),
-        status: String(created.status).toLowerCase(),
-      });
-    }
-
     return res.status(201).json(toClientOrder(created));
   } catch (error) {
     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to create order' });
@@ -210,19 +196,6 @@ router.post('/guest', async (req, res) => {
       },
       include: { items: true, user: true },
     });
-
-    const shippingAddress = getShippingAddress(created.shippingAddress);
-    const customerEmail = getString(created.user?.email) || getString(shippingAddress.email);
-    if (customerEmail) {
-      await sendOrderPlacedEmail({
-        orderId: created.id,
-        orderNumber: created.orderNumber,
-        customerName: getString(created.user?.name) || getString(shippingAddress.full_name) || 'Customer',
-        customerEmail,
-        total: Number(created.total || 0),
-        status: String(created.status).toLowerCase(),
-      });
-    }
 
     return res.status(201).json(toClientOrder(created));
   } catch (error) {

@@ -213,6 +213,17 @@ export const sendOrderStatusEmail = async (
   await safeSend(payload.customerEmail, content.subject, html);
 };
 
+export const sendPaymentFailedEmail = async (payload: Omit<OrderEmailPayload, 'status'>) => {
+  const html = emailLayout(`
+    <p>Dear ${payload.customerName || 'Customer'},</p>
+    <p>Unfortunately, we were unable to process your payment for the order below.</p>
+    ${orderTable(payload.orderNumber, payload.total)}
+    <p>Your cart has been preserved — you can head back and try again at your convenience.</p>
+    <p>If you continue to face issues, please reach out to us at <a href="mailto:${BRAND.email}" style="color:#8b7355;">${BRAND.email}</a> or call us at ${BRAND.phone}.</p>
+  `);
+  await safeSend(payload.customerEmail, `Payment Failed for Your Shan Decors Order`, html);
+};
+
 export const sendContactAcknowledgementEmail = async (name: string, email: string) => {
   const html = emailLayout(`
     <p>Dear ${name},</p>
