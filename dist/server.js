@@ -81,10 +81,23 @@ const limiter = (0, express_rate_limit_1.default)({
     max: 100, // limit each IP to 100 requests per windowMs
     message: 'Too many requests from this IP, please try again later.',
 });
+// Compact request logger: METHOD /path STATUS ms
+morgan_1.default.token('status-color', (_req, res) => {
+    const s = res.statusCode;
+    if (s >= 500)
+        return `\x1b[31m${s}\x1b[0m`; // red
+    if (s >= 400)
+        return `\x1b[33m${s}\x1b[0m`; // yellow
+    return `\x1b[32m${s}\x1b[0m`; // green
+});
+const httpLogger = (0, morgan_1.default)(':method :url :status-color :response-time ms', {
+    // Skip noisy Render health pings from the log entirely
+    skip: (req) => req.url === '/health',
+});
 // Middleware
 app.use((0, helmet_1.default)());
 app.use((0, compression_1.default)());
-app.use((0, morgan_1.default)('combined'));
+app.use(httpLogger);
 // Health check must be before rate limiter — Render pings every 5s and would exhaust the limit
 app.get('/health', async (_req, res) => {
     try {

@@ -10,22 +10,13 @@ interface DeleteResult {
 declare class StorageService {
     private supabase;
     private bucketName;
+    private bucketReady;
     constructor();
-    /**
-     * Upload file to Supabase Storage
-     */
+    /** Create the bucket if it doesn't exist — called once before the first upload. */
+    private ensureBucket;
     uploadFile(file: Buffer, fileName: string, contentType: string, path?: string): Promise<UploadResult>;
-    /**
-     * Delete file from Supabase Storage
-     */
     deleteFile(filePath: string): Promise<DeleteResult>;
-    /**
-     * Get public URL for a file
-     */
     getPublicUrl(filePath: string): string;
-    /**
-     * List files in a directory
-     */
     listFiles(path?: string): Promise<{
         files: string[];
         error?: string;

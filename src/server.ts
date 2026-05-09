@@ -94,10 +94,26 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.',
 });
 
+// Compact request logger: METHOD /path STATUS ms
+morgan.token('status-color', (_req, res) => {
+  const s = res.statusCode;
+  if (s >= 500) return `\x1b[31m${s}\x1b[0m`; // red
+  if (s >= 400) return `\x1b[33m${s}\x1b[0m`; // yellow
+  return `\x1b[32m${s}\x1b[0m`;                // green
+});
+
+const httpLogger = morgan(
+  ':method :url :status-color :response-time ms',
+  {
+    // Skip noisy Render health pings from the log entirely
+    skip: (req) => req.url === '/health',
+  }
+);
+
 // Middleware
 app.use(helmet());
 app.use(compression());
-app.use(morgan('combined'));
+app.use(httpLogger);
 
 // Health check must be before rate limiter — Render pings every 5s and would exhaust the limit
 app.get('/health', async (_req, res) => {
