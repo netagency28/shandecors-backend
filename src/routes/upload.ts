@@ -5,30 +5,30 @@ import { z } from 'zod';
 
 const router = Router();
 
+const ALLOWED_IMAGE_MIME = /^image\/(jpeg|jpg|png|gif|webp)$/;
+const ALLOWED_VIDEO_MIME = /^video\/(mp4|webm|quicktime|x-msvideo|ogg)$/;
+const ALLOWED_EXT = /\.(jpeg|jpg|png|gif|webp|mp4|webm|mov|avi|ogg)$/i;
+
+const fileFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
+  const mimeOk = ALLOWED_IMAGE_MIME.test(file.mimetype) || ALLOWED_VIDEO_MIME.test(file.mimetype);
+  const extOk = ALLOWED_EXT.test(file.originalname);
+  if (mimeOk && extOk) return cb(null, true);
+  cb(new Error('Invalid file type. Allowed: images (jpeg, png, gif, webp) and videos (mp4, webm, mov).'));
+};
+
 // Configure multer for memory storage
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
+    fileSize: 100 * 1024 * 1024, // 100MB — covers videos
   },
-  fileFilter: (req, file, cb) => {
-    // Allowed file types
-    const allowedTypes = /jpeg|jpg|png|gif|webp|pdf|doc|docx/;
-    const extname = allowedTypes.test(file.originalname.toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only images and documents are allowed.'));
-    }
-  },
+  fileFilter,
 });
 
 // Upload validation schema
 const uploadSchema = z.object({
   path: z.string().optional(),
-  type: z.enum(['product', 'user', 'document']).default('product'),
+  type: z.enum(['product', 'user', 'document', 'video']).default('product'),
 });
 
 // POST /api/upload/single - Upload single file
