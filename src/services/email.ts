@@ -39,6 +39,17 @@ const safeSend = async (to: string, subject: string, html: string) => {
   try {
     const result = await resend.emails.send({ from, to: [to], subject, html });
     if (result?.error) {
+      const isDomainError = (result.error as any)?.statusCode === 403 || String((result.error as any)?.message).includes('not verified');
+      if (isDomainError && from !== 'onboarding@resend.dev') {
+        console.warn(`Domain not verified for ${from}, retrying with onboarding@resend.dev`);
+        const retry = await resend.emails.send({ from: 'onboarding@resend.dev', to: [to], subject, html });
+        if (retry?.error) {
+          console.error('Resend email error (fallback):', retry.error);
+        } else {
+          console.info(`Email sent (fallback) to ${to}. id=${retry?.data?.id || 'n/a'}`);
+        }
+        return;
+      }
       console.error('Resend email error:', result.error);
       return;
     }

@@ -85,14 +85,24 @@ router.post('/create-order', async (req, res) => {
     const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8000}`;
     const shippingAddress = getShippingAddress(order.shippingAddress);
 
+    const resolvedPhone = customerPhone || shippingAddress.phone || '';
+    const resolvedEmail = customerEmail || order.user?.email || shippingAddress.email || '';
+
+    if (!resolvedPhone) {
+      return res.status(400).json({ message: 'customer_phone is required to create a payment order' });
+    }
+    if (!resolvedEmail) {
+      return res.status(400).json({ message: 'customer_email is required to create a payment order' });
+    }
+
     const payload = {
       order_id: order.orderNumber,
       order_amount: Number(order.total),
       order_currency: order.currency || 'INR',
       customer_details: {
         customer_id: order.userId || `guest_${order.id.slice(0, 8)}`,
-        customer_email: customerEmail || order.user?.email || shippingAddress.email || '',
-        customer_phone: customerPhone || shippingAddress.phone || '',
+        customer_email: resolvedEmail,
+        customer_phone: resolvedPhone,
         customer_name: customerName || order.user?.name || shippingAddress.full_name || 'Customer',
       },
       order_meta: {
@@ -114,6 +124,7 @@ router.post('/create-order', async (req, res) => {
 
     const cfJson = (await cfResponse.json().catch(() => ({}))) as Record<string, unknown>;
     if (!cfResponse.ok) {
+      console.error('Cashfree create-order error:', JSON.stringify(cfJson));
       return res.status(400).json({ message: 'Failed to create Cashfree payment order', cashfree_error: cfJson });
     }
 
