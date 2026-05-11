@@ -31,7 +31,7 @@ const skipOptions = (req: Request) => req.method === 'OPTIONS';
 // 1. Browse — product listing, categories, search
 export const browseLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 500,
+  limit: 500,
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipOptions,
@@ -42,7 +42,7 @@ export const browseLimiter = rateLimit({
 // 2. Auth — login, signup, forgot-password
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  limit: 10,
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
@@ -54,7 +54,7 @@ export const authLimiter = rateLimit({
 // 3. Checkout — cart, orders, payment creation
 export const checkoutLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 20,
+  limit: 20,
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipOptions,
@@ -65,7 +65,7 @@ export const checkoutLimiter = rateLimit({
 // 4. User — order history, profile, wishlist
 export const userLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  limit: 100,
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipOptions,
@@ -76,7 +76,7 @@ export const userLimiter = rateLimit({
 // 5. Admin — all /admin/* routes
 export const adminLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 300,
+  limit: 300,
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipOptions,
@@ -87,7 +87,7 @@ export const adminLimiter = rateLimit({
 // 6. Webhook — Cashfree and Instamojo callbacks
 export const webhookLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 50,
+  limit: 50,
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipOptions,
@@ -98,7 +98,7 @@ export const webhookLimiter = rateLimit({
 // 7. AI — per-user (not IP) for routes calling Anthropic/OpenAI/Google AI
 export const aiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 20,
+  limit: 20,
   keyGenerator: (req: Request) => (req as any).user?.id || req.ip || 'anonymous',
   standardHeaders: true,
   legacyHeaders: false,
