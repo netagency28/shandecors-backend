@@ -2,6 +2,7 @@ import express from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth';
 import { z } from 'zod';
+import { userLimiter } from '../middleware/rateLimiters';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -12,7 +13,7 @@ const addToWishlistSchema = z.object({
 });
 
 // Get user's wishlist
-router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
+router.get('/', userLimiter, authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const userId = req.user!.id;
     const { page = 1, limit = 20 } = req.query;
@@ -60,7 +61,7 @@ router.get('/', authenticateToken, async (req: AuthenticatedRequest, res) => {
 });
 
 // Check if product is in user's wishlist
-router.get('/check/:productId', authenticateToken, async (req: AuthenticatedRequest, res) => {
+router.get('/check/:productId', userLimiter, authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const userId = req.user!.id;
     const { productId } = req.params;

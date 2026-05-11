@@ -11,6 +11,9 @@ export declare const sendOrderStatusEmail: (payload: Omit<OrderEmailPayload, "st
     oldStatus?: string;
     newStatus: string;
 }) => Promise<void>;
+export declare const sendPaymentFailedEmail: (payload: Omit<OrderEmailPayload, "status"> & {
+    failureReason?: string;
+}) => Promise<void>;
 export declare const sendContactAcknowledgementEmail: (name: string, email: string) => Promise<void>;
 export {};
 //# sourceMappingURL=email.d.ts.map

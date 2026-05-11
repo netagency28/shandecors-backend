@@ -73,14 +73,33 @@ router.post('/create-order', async (req, res) => {
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
         const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8000}`;
         const shippingAddress = getShippingAddress(order.shippingAddress);
+        const rawPhone = customerPhone || shippingAddress.phone || '';
+        const resolvedEmail = customerEmail || order.user?.email || shippingAddress.email || '';
+        if (!rawPhone) {
+            return res.status(400).json({ message: 'customer_phone is required to create a payment order' });
+        }
+        if (!resolvedEmail) {
+            return res.status(400).json({ message: 'customer_email is required to create a payment order' });
+        }
+        // Cashfree requires exactly 10 digits — strip country code, spaces, and symbols
+        const digitsOnly = rawPhone.replace(/\D/g, '');
+        const resolvedPhone = digitsOnly.length === 12 && digitsOnly.startsWith('91')
+            ? digitsOnly.slice(2)
+            : digitsOnly.length === 11 && digitsOnly.startsWith('0')
+                ? digitsOnly.slice(1)
+                : digitsOnly;
+        if (resolvedPhone.length !== 10) {
+            return res.status(400).json({ message: `Invalid phone number: must be 10 digits (got "${rawPhone}")` });
+        }
+        const orderAmount = Math.round(Number(order.total) * 100) / 100;
         const payload = {
             order_id: order.orderNumber,
-            order_amount: Number(order.total),
+            order_amount: orderAmount,
             order_currency: order.currency || 'INR',
             customer_details: {
                 customer_id: order.userId || `guest_${order.id.slice(0, 8)}`,
-                customer_email: customerEmail || order.user?.email || shippingAddress.email || '',
-                customer_phone: customerPhone || shippingAddress.phone || '',
+                customer_email: resolvedEmail,
+                customer_phone: resolvedPhone,
                 customer_name: customerName || order.user?.name || shippingAddress.full_name || 'Customer',
             },
             order_meta: {
@@ -88,6 +107,7 @@ router.post('/create-order', async (req, res) => {
                 notify_url: `${backendUrl}/api/payments/webhook`,
             },
         };
+        console.info('Cashfree create-order payload:', JSON.stringify({ ...payload, customer_details: { ...payload.customer_details } }));
         const cfResponse = await fetch(`${config.baseUrl}/orders`, {
             method: 'POST',
             headers: {
@@ -100,6 +120,7 @@ router.post('/create-order', async (req, res) => {
         });
         const cfJson = (await cfResponse.json().catch(() => ({})));
         if (!cfResponse.ok) {
+            console.error('Cashfree create-order error:', JSON.stringify(cfJson));
             return res.status(400).json({ message: 'Failed to create Cashfree payment order', cashfree_error: cfJson });
         }
         await prisma.order.update({
@@ -167,6 +188,26 @@ router.get('/verify/:orderId', async (req, res) => {
         else if (cfPaymentStatus === 'FAILED') {
             await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: 'FAILED' } });
             paymentStatus = 'failed';
+            try {
+                const shipping = getShippingAddress(order.shippingAddress);
+                const failEmail = getString(order.user?.email) || getString(shipping.email);
+                if (failEmail) {
+                    const failureReason = getString(latestPayment?.payment_message) ||
+                        getString(latestPayment?.error_details?.error_description) ||
+                        undefined;
+                    await (0, email_1.sendPaymentFailedEmail)({
+                        orderId: order.id,
+                        orderNumber: order.orderNumber,
+                        customerName: getString(order.user?.name) || getString(shipping.full_name) || 'Customer',
+                        customerEmail: failEmail,
+                        total: Number(order.total || 0),
+                        failureReason,
+                    });
+                }
+            }
+            catch (emailErr) {
+                console.error('Payment failed email error (non-fatal):', emailErr);
+            }
         }
         return res.json({
             gateway: 'cashfree',
@@ -208,7 +249,7 @@ router.post('/webhook', async (req, res) => {
         if (!orderId)
             return res.status(400).json({ error: 'Missing order_id in payload' });
         const prisma = (0, database_1.default)();
-        const order = await prisma.order.findUnique({ where: { id: orderId } });
+        const order = await prisma.order.findUnique({ where: { id: orderId }, include: { user: true } });
         if (!order) {
             console.warn(`Webhook received for unknown order: ${orderId}`);
             return res.status(200).json({ ok: true });
@@ -241,6 +282,26 @@ router.post('/webhook', async (req, res) => {
         }
         else if (eventType === 'PAYMENT_FAILED' || eventType === 'PAYMENT_USER_DROPPED') {
             await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'FAILED' } });
+            try {
+                const shipping = getShippingAddress(order.shippingAddress);
+                const failEmail = getString(order.user?.email) || getString(shipping.email);
+                if (failEmail) {
+                    const failureReason = getString(payload?.data?.payment?.payment_message) ||
+                        getString(payload?.data?.payment?.error_details?.error_description) ||
+                        undefined;
+                    await (0, email_1.sendPaymentFailedEmail)({
+                        orderId: order.id,
+                        orderNumber: order.orderNumber,
+                        customerName: getString(order.user?.name) || getString(shipping.full_name) || 'Customer',
+                        customerEmail: failEmail,
+                        total: Number(order.total || 0),
+                        failureReason,
+                    });
+                }
+            }
+            catch (emailErr) {
+                console.error('Payment failed email error (non-fatal):', emailErr);
+            }
         }
         return res.status(200).json({ ok: true });
     }

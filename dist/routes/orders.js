@@ -6,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
-const email_1 = require("../services/email");
 const router = (0, express_1.Router)();
 const statusToClient = (status) => status.toLowerCase();
 const paymentToClient = (status) => {
@@ -137,18 +136,6 @@ router.post('/', auth_1.authMiddleware, async (req, res) => {
             },
             include: { items: true, user: true },
         });
-        const shipping = getShippingAddress(created.shippingAddress);
-        const customerEmail = getString(created.user?.email) || getString(shipping.email);
-        if (customerEmail) {
-            await (0, email_1.sendOrderPlacedEmail)({
-                orderId: created.id,
-                orderNumber: created.orderNumber,
-                customerName: getString(created.user?.name) || getString(shipping.full_name) || 'Customer',
-                customerEmail,
-                total: Number(created.total || 0),
-                status: String(created.status).toLowerCase(),
-            });
-        }
         return res.status(201).json(toClientOrder(created));
     }
     catch (error) {
@@ -201,18 +188,6 @@ router.post('/guest', async (req, res) => {
             },
             include: { items: true, user: true },
         });
-        const shippingAddress = getShippingAddress(created.shippingAddress);
-        const customerEmail = getString(created.user?.email) || getString(shippingAddress.email);
-        if (customerEmail) {
-            await (0, email_1.sendOrderPlacedEmail)({
-                orderId: created.id,
-                orderNumber: created.orderNumber,
-                customerName: getString(created.user?.name) || getString(shippingAddress.full_name) || 'Customer',
-                customerEmail,
-                total: Number(created.total || 0),
-                status: String(created.status).toLowerCase(),
-            });
-        }
         return res.status(201).json(toClientOrder(created));
     }
     catch (error) {

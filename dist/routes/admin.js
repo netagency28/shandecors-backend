@@ -204,24 +204,43 @@ router.get('/products', async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch admin products' });
     }
 });
+const productSchema = zod_1.z.object({
+    name: zod_1.z.string().trim().min(1).max(200),
+    slug: zod_1.z.string().trim().min(1).max(200).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase letters, numbers, and hyphens only'),
+    description: zod_1.z.string().trim().max(5000).nullable().optional(),
+    price: zod_1.z.number().nonnegative().max(1000000),
+    sale_price: zod_1.z.number().nonnegative().max(1000000).nullable().optional(),
+    sku: zod_1.z.string().trim().max(100).optional(),
+    stock: zod_1.z.number().int().nonnegative().max(100000),
+    images: zod_1.z.array(zod_1.z.string().url().max(500)).max(20).optional(),
+    category_id: zod_1.z.string().optional().nullable(),
+    is_active: zod_1.z.boolean().optional(),
+    is_featured: zod_1.z.boolean().optional(),
+    tags: zod_1.z.array(zod_1.z.string().trim().max(50)).max(20).optional(),
+});
+const productUpdateSchema = productSchema.partial();
 router.post('/products', async (req, res) => {
     try {
+        const parsed = productSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ message: 'Invalid input', details: parsed.error.flatten() });
+        }
+        const d = parsed.data;
         const prisma = (0, database_1.default)();
-        const body = req.body || {};
         const created = await prisma.product.create({
             data: {
-                name: body.name,
-                slug: body.slug,
-                description: body.description || null,
-                price: Number(body.price || 0),
-                comparePrice: body.sale_price !== undefined && body.sale_price !== null ? Number(body.sale_price) : null,
-                sku: body.sku || `SKU-${Date.now()}`,
-                stock: Number(body.stock || 0),
-                images: Array.isArray(body.images) ? body.images : [],
-                categoryId: body.category_id,
-                isActive: body.is_active !== false,
-                isFeatured: body.is_featured === true,
-                tags: Array.isArray(body.tags) ? body.tags : [],
+                name: d.name,
+                slug: d.slug,
+                description: d.description ?? null,
+                price: d.price,
+                comparePrice: d.sale_price ?? null,
+                sku: d.sku || `SKU-${Date.now()}`,
+                stock: d.stock,
+                images: d.images ?? [],
+                categoryId: d.category_id ?? null,
+                isActive: d.is_active !== false,
+                isFeatured: d.is_featured === true,
+                tags: d.tags ?? [],
             },
             include: { category: true },
         });
@@ -233,23 +252,27 @@ router.post('/products', async (req, res) => {
 });
 router.put('/products/:productId', async (req, res) => {
     try {
+        const parsed = productUpdateSchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ message: 'Invalid input', details: parsed.error.flatten() });
+        }
+        const d = parsed.data;
         const prisma = (0, database_1.default)();
-        const body = req.body || {};
         const updated = await prisma.product.update({
             where: { id: req.params.productId },
             data: {
-                ...(body.name !== undefined ? { name: body.name } : {}),
-                ...(body.slug !== undefined ? { slug: body.slug } : {}),
-                ...(body.description !== undefined ? { description: body.description } : {}),
-                ...(body.price !== undefined ? { price: Number(body.price) } : {}),
-                ...(body.sale_price !== undefined ? { comparePrice: body.sale_price === null ? null : Number(body.sale_price) } : {}),
-                ...(body.sku !== undefined ? { sku: body.sku } : {}),
-                ...(body.stock !== undefined ? { stock: Number(body.stock) } : {}),
-                ...(body.images !== undefined ? { images: Array.isArray(body.images) ? body.images : [] } : {}),
-                ...(body.category_id !== undefined ? { categoryId: body.category_id } : {}),
-                ...(body.is_active !== undefined ? { isActive: Boolean(body.is_active) } : {}),
-                ...(body.is_featured !== undefined ? { isFeatured: Boolean(body.is_featured) } : {}),
-                ...(body.tags !== undefined ? { tags: Array.isArray(body.tags) ? body.tags : [] } : {}),
+                ...(d.name !== undefined ? { name: d.name } : {}),
+                ...(d.slug !== undefined ? { slug: d.slug } : {}),
+                ...(d.description !== undefined ? { description: d.description } : {}),
+                ...(d.price !== undefined ? { price: d.price } : {}),
+                ...(d.sale_price !== undefined ? { comparePrice: d.sale_price } : {}),
+                ...(d.sku !== undefined ? { sku: d.sku } : {}),
+                ...(d.stock !== undefined ? { stock: d.stock } : {}),
+                ...(d.images !== undefined ? { images: d.images } : {}),
+                ...(d.category_id !== undefined ? { categoryId: d.category_id ?? null } : {}),
+                ...(d.is_active !== undefined ? { isActive: d.is_active } : {}),
+                ...(d.is_featured !== undefined ? { isFeatured: d.is_featured } : {}),
+                ...(d.tags !== undefined ? { tags: d.tags } : {}),
             },
             include: { category: true },
         });
@@ -274,7 +297,8 @@ router.delete('/products/:productId', async (req, res) => {
 });
 router.post('/products/bulk-delete', async (req, res) => {
     try {
-        const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+        const raw = Array.isArray(req.body?.ids) ? req.body.ids : [];
+        const ids = raw.filter((id) => typeof id === 'string' && id.length > 0).slice(0, 100);
         if (!ids.length)
             return res.status(400).json({ message: 'ids is required' });
         const prisma = (0, database_1.default)();
@@ -358,17 +382,28 @@ router.put('/orders/:orderId/status', async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to update order status' });
     }
 });
+const categorySchema = zod_1.z.object({
+    name: zod_1.z.string().trim().min(1).max(100),
+    slug: zod_1.z.string().trim().min(1).max(100).regex(/^[a-z0-9-]+$/, 'Slug must be lowercase letters, numbers, and hyphens only'),
+    description: zod_1.z.string().trim().max(1000).nullable().optional(),
+    image_url: zod_1.z.string().url().max(500).nullable().optional(),
+    is_active: zod_1.z.boolean().optional(),
+});
 router.post('/categories', async (req, res) => {
     try {
+        const parsed = categorySchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ message: 'Invalid input', details: parsed.error.flatten() });
+        }
+        const { name, slug, description, image_url, is_active } = parsed.data;
         const prisma = (0, database_1.default)();
-        const body = req.body || {};
         const created = await prisma.category.create({
             data: {
-                name: body.name,
-                slug: body.slug,
-                description: body.description || null,
-                image: body.image_url || null,
-                isActive: body.is_active !== false,
+                name,
+                slug,
+                description: description ?? null,
+                image: image_url ?? null,
+                isActive: is_active !== false,
             },
         });
         return res.status(201).json({
@@ -387,7 +422,29 @@ router.post('/categories', async (req, res) => {
 router.delete('/categories/:categoryId', async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
-        await prisma.category.delete({ where: { id: req.params.categoryId } });
+        const { categoryId } = req.params;
+        // Block if active (non-deleted) products are still in this category
+        const activeCount = await prisma.product.count({ where: { categoryId, deletedAt: null } });
+        if (activeCount > 0) {
+            return res.status(409).json({
+                message: `Cannot delete this category — ${activeCount} active product${activeCount === 1 ? '' : 's'} still assigned to it. Reassign or delete those products first.`,
+            });
+        }
+        // categoryId is NOT NULL on Product, so archived products must be hard-deleted before
+        // the category can be removed. Only safe to hard-delete if they have no order history.
+        const archivedWithOrders = await prisma.product.count({
+            where: { categoryId, deletedAt: { not: null }, orderItems: { some: {} } },
+        });
+        if (archivedWithOrders > 0) {
+            return res.status(409).json({
+                message: `Cannot delete this category — ${archivedWithOrders} archived product${archivedWithOrders === 1 ? '' : 's'} still ha${archivedWithOrders === 1 ? 's' : 've'} order history. Contact support to migrate those order references first.`,
+            });
+        }
+        // Hard-delete archived products with no orders (cart items, reviews, wishlists cascade)
+        await prisma.product.deleteMany({
+            where: { categoryId, deletedAt: { not: null } },
+        });
+        await prisma.category.delete({ where: { id: categoryId } });
         return res.json({ message: 'Category deleted successfully' });
     }
     catch (error) {
@@ -420,9 +477,16 @@ router.put('/users/:id/role', async (req, res) => {
             return res.status(400).json({ message: 'Invalid role' });
         }
         const prisma = (0, database_1.default)();
+        if (role === 'CUSTOMER' && req.user.id === req.params.id) {
+            const adminCount = await prisma.user.count({ where: { role: 'ADMIN' } });
+            if (adminCount <= 1) {
+                return res.status(400).json({ message: 'Cannot demote the only admin account.' });
+            }
+        }
         const updatedUser = await prisma.user.update({
             where: { id: req.params.id },
             data: { role },
+            select: { id: true, email: true, name: true, role: true, createdAt: true },
         });
         return res.json(updatedUser);
     }

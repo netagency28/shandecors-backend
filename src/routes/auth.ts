@@ -1,27 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import rateLimit from 'express-rate-limit';
 import getPrismaClient from '../services/database';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import { authService, getSupabaseClient } from '../services/auth-service';
+import { authLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
-
-const strictAuthLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many attempts. Please try again in 15 minutes.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const resetPasswordLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 5,
-  message: { error: 'Too many password reset requests. Please try again in an hour.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
 const signUpSchema = z.object({
   email: z.string().email(),
@@ -86,7 +70,7 @@ const buildUserResponse = (
   role: localUser?.role || user.user_metadata?.role || 'CUSTOMER',
 });
 
-router.post('/signup', strictAuthLimiter, async (req, res, next) => {
+router.post('/signup', authLimiter, async (req, res, next) => {
   try {
     const validatedData = signUpSchema.parse(req.body);
 
@@ -106,7 +90,7 @@ router.post('/signup', strictAuthLimiter, async (req, res, next) => {
   }
 });
 
-router.post('/signin', strictAuthLimiter, async (req, res, next) => {
+router.post('/signin', authLimiter, async (req, res, next) => {
   try {
     const validatedData = signInSchema.parse(req.body);
 
@@ -259,7 +243,7 @@ router.post('/profile', authMiddleware, async (req: AuthenticatedRequest, res, n
 });
 
 // Reset password
-router.post('/reset-password', resetPasswordLimiter, async (req, res) => {
+router.post('/reset-password', authLimiter, async (req, res) => {
   try {
     const validatedData = resetPasswordSchema.parse(req.body);
 

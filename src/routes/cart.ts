@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import getPrismaClient from '../services/database';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
+import { checkoutLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
 
@@ -44,7 +45,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
   }
 });
 
-router.post('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
+router.post('/', checkoutLimiter, authMiddleware, async (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
 

@@ -6,6 +6,7 @@ import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import path from 'path';
+import * as Sentry from '@sentry/node';
 
 import { errorHandler } from './middleware/errorHandler';
 import routes from './routes';
@@ -27,6 +28,27 @@ const validateEnv = () => {
 validateEnv();
 
 const app = express();
+
+// Sentry must be initialised before any middleware so it can instrument Express
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    integrations: [
+      new Sentry.Integrations.Http({ tracing: true }),
+      new Sentry.Integrations.Express({ app }),
+    ],
+    tracesSampleRate: 0.1,
+    // Never send PII fields as tags
+    beforeSend(event) {
+      if (event.request?.data) {
+        const data = event.request.data as Record<string, unknown>;
+        for (const key of ['email', 'phone', 'password', 'address']) delete data[key];
+      }
+      return event;
+    },
+  });
+}
 
 const normalizeOrigin = (origin: string) => origin.trim().replace(/\/+$/, '');
 
@@ -73,7 +95,7 @@ const corsOptions: cors.CorsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'baggage', 'sentry-trace'],
   preflightContinue: false,
   optionsSuccessStatus: 204,
 };
@@ -90,7 +112,7 @@ app.set('trust proxy', 1);
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
+  max: 1000, // limit each IP to 1000 requests per windowMs
   message: 'Too many requests from this IP, please try again later.',
 });
 
@@ -109,6 +131,9 @@ const httpLogger = morgan(
     skip: (req) => req.url === '/health',
   }
 );
+
+// Sentry request handler — must be the first middleware to capture full request context
+app.use(Sentry.Handlers.requestHandler());
 
 // Middleware
 app.use(helmet());
@@ -131,6 +156,10 @@ app.options('*', cors(corsOptions));
 
 app.use(limiter);
 app.use(cors(corsOptions));
+
+// Webhook route needs raw body for HMAC signature verification — must come before express.json()
+app.use('/api/payments/webhook', express.raw({ type: '*/*' }));
+
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
@@ -161,6 +190,9 @@ app.get('/debug-cors', (req, res) => {
 
 // API routes
 app.use('/api', routes);
+
+// Sentry error handler — must be before the custom error handler to capture unhandled exceptions
+app.use(Sentry.Handlers.errorHandler());
 
 // Error handling middleware (must be last)
 app.use(errorHandler);

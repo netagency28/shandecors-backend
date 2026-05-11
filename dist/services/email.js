@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendContactAcknowledgementEmail = exports.sendOrderStatusEmail = exports.sendOrderPlacedEmail = void 0;
+exports.sendContactAcknowledgementEmail = exports.sendPaymentFailedEmail = exports.sendOrderStatusEmail = exports.sendOrderPlacedEmail = void 0;
 const resend_1 = require("resend");
 const BRAND = {
     email: 'shandecor01@gmail.com',
@@ -28,6 +28,18 @@ const safeSend = async (to, subject, html) => {
     try {
         const result = await resend.emails.send({ from, to: [to], subject, html });
         if (result?.error) {
+            const isDomainError = result.error?.statusCode === 403 || String(result.error?.message).includes('not verified');
+            if (isDomainError && from !== 'onboarding@resend.dev') {
+                console.warn(`Domain not verified for ${from}, retrying with onboarding@resend.dev`);
+                const retry = await resend.emails.send({ from: 'onboarding@resend.dev', to: [to], subject, html });
+                if (retry?.error) {
+                    console.error('Resend email error (fallback):', retry.error);
+                }
+                else {
+                    console.info(`Email sent (fallback) to ${to}. id=${retry?.data?.id || 'n/a'}`);
+                }
+                return;
+            }
             console.error('Resend email error:', result.error);
             return;
         }
@@ -41,8 +53,10 @@ const emailLayout = (body) => `
 <div style="background-color:#f9f7f2;padding:40px 20px;font-family:Georgia,'Times New Roman',serif;">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e8e0d6;">
     <div style="padding:28px 40px 20px;border-bottom:1px solid #e8e0d6;text-align:center;">
-      <p style="font-size:20px;letter-spacing:3px;color:#2d2926;margin:0;font-weight:normal;">SHAN DECORS</p>
-      <p style="font-size:11px;color:#8b7355;letter-spacing:1px;margin:5px 0 0;font-style:italic;">Nature to Your Hands</p>
+      <a href="https://shandecors.store" style="display:inline-block;">
+        <img src="https://qkrcnxrabkmqrnlplagf.supabase.co/storage/v1/object/public/uploads/logos/shandecors_column_logo.png" alt="Shan Decors" style="height:60px;width:auto;display:block;margin:0 auto;" />
+      </a>
+      <p style="font-size:11px;color:#8b7355;letter-spacing:1px;margin:8px 0 0;font-style:italic;">Nature to Your Hands</p>
     </div>
     <div style="padding:32px 40px;color:#4a4540;font-size:15px;line-height:1.8;">
       ${body}
@@ -177,6 +191,21 @@ const sendOrderStatusEmail = async (payload) => {
     await safeSend(payload.customerEmail, content.subject, html);
 };
 exports.sendOrderStatusEmail = sendOrderStatusEmail;
+const sendPaymentFailedEmail = async (payload) => {
+    const reasonLine = payload.failureReason
+        ? `<p style="color:#c0392b;background:#fdf2f2;border-left:3px solid #c0392b;padding:10px 14px;margin:16px 0;font-size:14px;"><strong>Reason:</strong> ${payload.failureReason}</p>`
+        : '';
+    const html = emailLayout(`
+    <p>Dear ${payload.customerName || 'Customer'},</p>
+    <p>Unfortunately, we were unable to process your payment for the order below.</p>
+    ${orderTable(payload.orderNumber, payload.total)}
+    ${reasonLine}
+    <p>Your cart has been preserved — you can head back and try again at your convenience.</p>
+    <p>If you continue to face issues, please reach out to us at <a href="mailto:support@shandecors.store" style="color:#8b7355;">csupport@shandecors.store</a> or call us at ${BRAND.phone}.</p>
+  `);
+    await safeSend(payload.customerEmail, `Payment Failed for Your Shan Decors Order`, html);
+};
+exports.sendPaymentFailedEmail = sendPaymentFailedEmail;
 const sendContactAcknowledgementEmail = async (name, email) => {
     const html = emailLayout(`
     <p>Dear ${name},</p>

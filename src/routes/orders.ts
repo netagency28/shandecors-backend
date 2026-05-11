@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import getPrismaClient from '../services/database';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
+import { checkoutLimiter, userLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
 
@@ -61,7 +62,7 @@ const getShippingAddress = (value: unknown): Record<string, unknown> => {
 
 const getString = (value: unknown) => (typeof value === 'string' ? value : '');
 
-router.get('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
+router.get('/', userLimiter, authMiddleware, async (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
 
@@ -78,7 +79,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
   }
 });
 
-router.get('/:orderId', authMiddleware, async (req: AuthenticatedRequest, res) => {
+router.get('/:orderId', userLimiter, authMiddleware, async (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
 
@@ -95,7 +96,7 @@ router.get('/:orderId', authMiddleware, async (req: AuthenticatedRequest, res) =
   }
 });
 
-router.post('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
+router.post('/', checkoutLimiter, authMiddleware, async (req: AuthenticatedRequest, res) => {
   try {
     if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
 
@@ -146,7 +147,7 @@ router.post('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
   }
 });
 
-router.post('/guest', async (req, res) => {
+router.post('/guest', checkoutLimiter, async (req, res) => {
   try {
     const prisma = getPrismaClient();
     const body = req.body || {};

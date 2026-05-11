@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import getPrismaClient from '../services/database';
+import { browseLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
 
@@ -28,7 +29,7 @@ const toClientProduct = (product: any) => ({
   updated_at: product.updatedAt,
 });
 
-router.get('/', async (req, res) => {
+router.get('/', browseLimiter, async (req, res) => {
   try {
     const prisma = getPrismaClient();
 
@@ -81,7 +82,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.get('/id/:id', async (req, res) => {
+router.get('/id/:id', browseLimiter, async (req, res) => {
   try {
     const prisma = getPrismaClient();
     const product = await prisma.product.findFirst({
@@ -99,7 +100,7 @@ router.get('/id/:id', async (req, res) => {
   }
 });
 
-router.get('/:slug', async (req, res) => {
+router.get('/:slug', browseLimiter, async (req, res) => {
   try {
     const prisma = getPrismaClient();
     const product = await prisma.product.findFirst({

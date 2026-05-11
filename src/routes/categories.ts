@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import getPrismaClient from '../services/database';
+import { browseLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
 
@@ -14,7 +15,7 @@ const toClientCategory = (category: any) => ({
   updated_at: category.updatedAt,
 });
 
-router.get('/', async (_req, res) => {
+router.get('/', browseLimiter, async (_req, res) => {
   try {
     const prisma = getPrismaClient();
     const categories = await prisma.category.findMany({
@@ -28,7 +29,7 @@ router.get('/', async (_req, res) => {
   }
 });
 
-router.get('/:slug', async (req, res) => {
+router.get('/:slug', browseLimiter, async (req, res) => {
   try {
     const prisma = getPrismaClient();
     const category = await prisma.category.findUnique({ where: { slug: req.params.slug } });

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import getPrismaClient from '../services/database';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
+import { userLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
 
@@ -10,7 +11,7 @@ const updateProfileSchema = z.object({
   phone: z.string().trim().min(6).max(20).optional(),
 });
 
-router.get('/profile', authMiddleware, async (req: AuthenticatedRequest, res) => {
+router.get('/profile', userLimiter, authMiddleware, async (req: AuthenticatedRequest, res) => {
   try {
     const prisma = getPrismaClient();
     const user = await prisma.user.findUnique({

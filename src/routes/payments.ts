@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import * as Sentry from '@sentry/node';
 import getPrismaClient from '../services/database';
 import { sendOrderStatusEmail, sendPaymentFailedEmail } from '../services/email';
+import { checkoutLimiter, webhookLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
 
@@ -60,7 +62,7 @@ const markOrderConfirmedAndNotify = async (order: any, oldStatus: string) => {
   });
 };
 
-router.post('/create-order', async (req, res) => {
+router.post('/create-order', checkoutLimiter, async (req, res) => {
   try {
     const prisma = getPrismaClient();
     const orderId = req.body?.order_id as string | undefined;
@@ -220,12 +222,17 @@ router.get('/verify/:orderId', async (req, res) => {
         const shipping = getShippingAddress(order.shippingAddress);
         const failEmail = getString(order.user?.email) || getString(shipping.email);
         if (failEmail) {
+          const failureReason =
+            getString(latestPayment?.payment_message) ||
+            getString((latestPayment?.error_details as any)?.error_description) ||
+            undefined;
           await sendPaymentFailedEmail({
             orderId: order.id,
             orderNumber: order.orderNumber,
             customerName: getString(order.user?.name) || getString(shipping.full_name) || 'Customer',
             customerEmail: failEmail,
             total: Number(order.total || 0),
+            failureReason,
           });
         }
       } catch (emailErr) {
@@ -245,97 +252,205 @@ router.get('/verify/:orderId', async (req, res) => {
   }
 });
 
-router.post('/webhook', async (req, res) => {
+const logWebhookFailure = (orderId: string, paymentId: string, reason: string) => {
+  console.error(
+    `[Webhook] FAILURE timestamp=${new Date().toISOString()} order_id=${orderId} payment_id=${paymentId} failure_reason=${reason}`
+  );
+  // TODO: increment cashfree_payment_failure_total{failure_reason} Prometheus counter (Task 11)
+};
+
+router.post('/webhook', webhookLimiter, async (req, res) => {
+  // These are populated as we parse the payload so Sentry catch block has context
+  let orderId = 'unknown';
+  let paymentId = 'unknown';
+  let userId: string | undefined;
+
   try {
-    const clientSecret = cleanEnv(process.env.CASHFREE_CLIENT_SECRET);
-    if (!clientSecret) {
-      console.error('Webhook received but CASHFREE_CLIENT_SECRET is not set');
-      return res.status(500).json({ error: 'Gateway not configured' });
-    }
-
-    const rawSignature = req.headers['x-webhook-signature'] as string;
-    const timestamp = req.headers['x-webhook-timestamp'] as string;
-
-    if (!rawSignature || !timestamp) {
-      return res.status(400).json({ error: 'Missing webhook signature headers' });
-    }
-
-    const body = JSON.stringify(req.body);
-    const expectedSignature = crypto
-      .createHmac('sha256', clientSecret)
-      .update(`${timestamp}${body}`)
-      .digest('base64');
-
-    if (expectedSignature !== rawSignature) {
-      console.warn('Invalid webhook signature — possible replay or spoofing attempt');
-      return res.status(400).json({ error: 'Invalid signature' });
-    }
-
-    const payload = req.body;
-    const eventType: string = payload?.type || '';
-    const cfPaymentId: string = String(payload?.data?.payment?.cf_payment_id || '');
-    const orderId: string = String(payload?.data?.order?.order_id || '');
-
-    if (!orderId) return res.status(400).json({ error: 'Missing order_id in payload' });
-
-    const prisma = getPrismaClient();
-    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { user: true } });
-
-    if (!order) {
-      console.warn(`Webhook received for unknown order: ${orderId}`);
+    // ── 1. SIGNATURE VERIFICATION ──────────────────────────────────────────────
+    const webhookSecret = process.env.CASHFREE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error('[Webhook] CASHFREE_WEBHOOK_SECRET not configured — cannot verify signature');
+      // Return 200 so Cashfree does not retry; alert must be resolved out-of-band
       return res.status(200).json({ ok: true });
     }
 
-    if (order.paymentStatus === 'COMPLETED') {
-      return res.status(200).json({ ok: true, message: 'Already processed' });
+    const signature = req.headers['x-webhook-signature'] as string | undefined;
+    const timestamp = req.headers['x-webhook-timestamp'] as string | undefined;
+
+    if (!signature || !timestamp) {
+      return res.status(401).json({
+        error: 'INVALID_SIGNATURE',
+        message: 'Webhook signature verification failed',
+      });
     }
 
+    // express.raw() delivers req.body as Buffer; fall back gracefully if not
+    const rawBodyBuf: Buffer = Buffer.isBuffer(req.body)
+      ? req.body
+      : Buffer.from(typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {}));
+    const rawBodyStr = rawBodyBuf.toString('utf8');
+
+    const expectedSig = crypto
+      .createHmac('sha256', webhookSecret)
+      .update(`${timestamp}${rawBodyStr}`)
+      .digest('base64');
+
+    if (expectedSig !== signature) {
+      console.warn('[Webhook] Invalid signature — possible replay or spoofing attempt');
+      return res.status(401).json({
+        error: 'INVALID_SIGNATURE',
+        message: 'Webhook signature verification failed',
+      });
+    }
+
+    // ── 2. PARSE PAYLOAD ───────────────────────────────────────────────────────
+    let payload: Record<string, any>;
+    try {
+      payload = JSON.parse(rawBodyStr);
+    } catch {
+      console.warn('[Webhook] Malformed JSON body after valid signature');
+      return res.status(200).json({ ok: true });
+    }
+
+    const eventType = String(payload?.type || '');
+    paymentId = String(payload?.data?.payment?.cf_payment_id || '');
+    const orderNumber = String(payload?.data?.order?.order_id || '');
+    // Cashfree sends amount in the same unit (Rupees) as we created the order
+    const webhookAmount = Number(
+      payload?.data?.order?.order_amount ?? payload?.data?.payment?.payment_amount ?? 0
+    );
+
+    if (!orderNumber) {
+      console.warn('[Webhook] Missing order_id in payload');
+      return res.status(200).json({ ok: true });
+    }
+
+    orderId = orderNumber;
+
+    const prisma = getPrismaClient();
+
+    // orderNumber is what we pass to Cashfree (SD-xxx), not the internal UUID
+    const order = await prisma.order.findFirst({
+      where: { orderNumber },
+      include: { user: true },
+    });
+
+    if (!order) {
+      console.warn(`[Webhook] Order not found for orderNumber: ${orderNumber}`);
+      return res.status(200).json({ ok: true });
+    }
+
+    orderId = order.id;
+    userId = order.userId ?? undefined;
+
+    // ── 3. AMOUNT VALIDATION ───────────────────────────────────────────────────
+    const orderTotal = Number(order.total);
+    if (webhookAmount > 0 && Math.abs(webhookAmount - orderTotal) > 0.01) {
+      const mismatchMsg = `Amount mismatch: expected ₹${orderTotal}, received ₹${webhookAmount}`;
+      console.error(`[Webhook] ${mismatchMsg} order_id=${orderId} payment_id=${paymentId}`);
+      Sentry.captureMessage(mismatchMsg, {
+        level: 'error',
+        tags: { order_id: orderId, payment_id: paymentId },
+        extra: { expected: orderTotal, received: webhookAmount },
+      });
+      logWebhookFailure(orderId, paymentId, 'amount_mismatch');
+      return res.status(400).json({ error: 'AMOUNT_MISMATCH' });
+    }
+
+    // ── 4. PROCESS EVENT ───────────────────────────────────────────────────────
     if (eventType === 'PAYMENT_SUCCESS') {
-      await prisma.order.update({
-        where: { id: orderId },
-        data: { paymentStatus: 'COMPLETED', status: 'CONFIRMED', paymentId: cfPaymentId || order.paymentId },
+      // Idempotency check + update inside a transaction to prevent duplicate processing
+      const { alreadyProcessed } = await prisma.$transaction(async (tx) => {
+        const fresh = await tx.order.findFirst({
+          where: { orderNumber },
+          select: { id: true, paymentStatus: true },
+        });
+
+        if (!fresh || fresh.paymentStatus === 'COMPLETED') {
+          return { alreadyProcessed: true as const };
+        }
+
+        await tx.order.update({
+          where: { id: fresh.id },
+          data: {
+            paymentStatus: 'COMPLETED',
+            status: 'CONFIRMED',
+            paymentId: paymentId || order.paymentId,
+          },
+        });
+
+        return { alreadyProcessed: false as const };
       });
 
+      if (alreadyProcessed) {
+        console.warn(`[Webhook] Already processed — skipping: order_id=${orderId}`);
+        return res.status(200).json({ ok: true, message: 'Already processed' });
+      }
+
+      // Post-payment actions
       try {
-        const shippingAddress = getShippingAddress(order.shippingAddress);
-        const email = shippingAddress.email;
+        const shipping = getShippingAddress(order.shippingAddress);
+        const email = getString(order.user?.email) || getString(shipping.email);
         if (email) {
           await sendOrderStatusEmail({
             orderNumber: order.orderNumber,
             orderId: order.id,
-            customerName: shippingAddress.full_name || '',
+            customerName: getString(order.user?.name) || getString(shipping.full_name) || 'Customer',
             customerEmail: email,
             total: order.total,
             newStatus: 'confirmed',
           });
         }
       } catch (emailErr) {
-        console.error('Order confirmation email failed (non-fatal):', emailErr);
+        console.error('[Webhook] Order confirmation email failed (non-fatal):', emailErr);
       }
+
+      // TODO: increment cashfree_payment_success_total Prometheus counter (Task 11)
+      console.info(
+        `[Webhook] SUCCESS timestamp=${new Date().toISOString()} order_id=${orderId} payment_id=${paymentId}`
+      );
+
     } else if (eventType === 'PAYMENT_FAILED' || eventType === 'PAYMENT_USER_DROPPED') {
-      await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'FAILED' } });
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { paymentStatus: 'FAILED' },
+      });
 
       try {
         const shipping = getShippingAddress(order.shippingAddress);
         const failEmail = getString(order.user?.email) || getString(shipping.email);
         if (failEmail) {
+          const failureReason =
+            getString(payload?.data?.payment?.payment_message) ||
+            getString(payload?.data?.payment?.error_details?.error_description) ||
+            undefined;
           await sendPaymentFailedEmail({
             orderId: order.id,
             orderNumber: order.orderNumber,
             customerName: getString(order.user?.name) || getString(shipping.full_name) || 'Customer',
             customerEmail: failEmail,
             total: Number(order.total || 0),
+            failureReason,
           });
         }
       } catch (emailErr) {
-        console.error('Payment failed email error (non-fatal):', emailErr);
+        console.error('[Webhook] Payment failure email error (non-fatal):', emailErr);
       }
+
+      logWebhookFailure(orderId, paymentId, eventType.toLowerCase());
+      // TODO: increment cashfree_payment_failure_total Prometheus counter (Task 11)
     }
 
     return res.status(200).json({ ok: true });
+
   } catch (error) {
-    console.error('Webhook processing error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    console.error('[Webhook] Uncaught error:', error);
+    Sentry.captureException(error, {
+      tags: { order_id: orderId, payment_id: paymentId },
+      extra: { userId },
+    });
+    // Always return 200 so Cashfree does not retry
+    return res.status(200).json({ ok: true });
   }
 });
 
