@@ -2,6 +2,7 @@ import { Router } from 'express';
 import getPrismaClient from '../services/database';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import { checkoutLimiter, userLimiter } from '../middleware/rateLimiters';
+import { sendOrderPlacedEmail } from '../services/email';
 
 const router = Router();
 
@@ -141,6 +142,19 @@ router.post('/', checkoutLimiter, authMiddleware, async (req: AuthenticatedReque
       include: { items: true, user: true },
     });
 
+    // Send order receipt — fire-and-forget so email failure never blocks the response
+    const customerEmail = getString(created.user?.email) || getString(getShippingAddress(created.shippingAddress).email);
+    if (customerEmail) {
+      sendOrderPlacedEmail({
+        orderId: created.id,
+        orderNumber: created.orderNumber,
+        customerName: getString(created.user?.name) || getString(getShippingAddress(created.shippingAddress).full_name) || 'Customer',
+        customerEmail,
+        total: Number(created.total || 0),
+        status: created.paymentStatus,
+      }).catch((e) => console.error('[Orders] Placed email failed (non-fatal):', e));
+    }
+
     return res.status(201).json(toClientOrder(created));
   } catch (error) {
     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to create order' });
@@ -197,6 +211,18 @@ router.post('/guest', checkoutLimiter, async (req, res) => {
       },
       include: { items: true, user: true },
     });
+
+    const guestEmail = getString(created.user?.email) || getString(getShippingAddress(created.shippingAddress).email);
+    if (guestEmail) {
+      sendOrderPlacedEmail({
+        orderId: created.id,
+        orderNumber: created.orderNumber,
+        customerName: getString(created.user?.name) || getString(getShippingAddress(created.shippingAddress).full_name) || 'Customer',
+        customerEmail: guestEmail,
+        total: Number(created.total || 0),
+        status: created.paymentStatus,
+      }).catch((e) => console.error('[Orders] Guest placed email failed (non-fatal):', e));
+    }
 
     return res.status(201).json(toClientOrder(created));
   } catch (error) {

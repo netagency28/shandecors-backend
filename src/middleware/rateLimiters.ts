@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { RedisStore, type RedisReply } from 'rate-limit-redis';
 import type { Request, Response } from 'express';
 import { redisClient } from '../config/redis';
@@ -99,7 +99,7 @@ export const webhookLimiter = rateLimit({
 export const aiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 20,
-  keyGenerator: (req: Request) => (req as any).user?.id || req.ip || 'anonymous',
+  keyGenerator: (req: Request) => (req as any).user?.id || ipKeyGenerator(req),
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipOptions,

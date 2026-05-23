@@ -40,29 +40,43 @@ const safeSend = async (to: string, subject: string, html: string) => {
   try {
     const result = await resend.emails.send({ from, to: [to], subject, html });
     if (result?.error) {
-      const isDomainError = (result.error as any)?.statusCode === 403 || String((result.error as any)?.message).includes('not verified');
+      const errMsg = String((result.error as any)?.message || '');
+      const statusCode = (result.error as any)?.statusCode ?? (result.error as any)?.status ?? 0;
+      // Resend rejects non-verified / disallowed sender domains with 403 or 422
+      const isDomainError =
+        statusCode === 403 ||
+        statusCode === 422 ||
+        errMsg.toLowerCase().includes('not verified') ||
+        errMsg.toLowerCase().includes('domain') ||
+        errMsg.toLowerCase().includes('not allowed');
+
       if (isDomainError && from !== 'onboarding@resend.dev') {
-        console.warn(`Domain not verified for ${from}, retrying with onboarding@resend.dev`);
+        console.warn(`[Email] Sender domain not allowed for "${from}" — retrying with onboarding@resend.dev`);
         const retry = await resend.emails.send({ from: 'onboarding@resend.dev', to: [to], subject, html });
         if (retry?.error) {
-          console.error('Resend email error (fallback):', retry.error);
+          Sentry.captureMessage(`Resend fallback error: ${(retry.error as any)?.message}`, {
+            level: 'error',
+            tags: { email_type: subject },
+            extra: { error: retry.error },
+          });
+          console.error('[Email] Fallback send failed:', retry.error);
         } else {
-          console.info(`Email sent (fallback) to ${to}. id=${retry?.data?.id || 'n/a'}`);
+          console.info(`[Email] Sent via fallback sender. id=${retry?.data?.id || 'n/a'} to=<redacted>`);
         }
         return;
       }
-      Sentry.captureMessage(`Resend error: ${(result.error as any)?.message}`, {
+      Sentry.captureMessage(`Resend error: ${errMsg}`, {
         level: 'error',
         tags: { email_type: subject },
-        extra: { error: result.error },
+        extra: { error: result.error, statusCode },
       });
-      console.error('Resend email error:', result.error);
+      console.error(`[Email] Send failed (status=${statusCode}):`, result.error);
       return;
     }
-    console.info(`Email sent successfully. id=${result?.data?.id || 'n/a'}`);
+    console.info(`[Email] Sent successfully. id=${result?.data?.id || 'n/a'}`);
   } catch (error) {
     Sentry.captureException(error, { tags: { email_type: subject } });
-    console.error('Resend email failed:', error);
+    console.error('[Email] Unexpected error:', error);
   }
 };
 

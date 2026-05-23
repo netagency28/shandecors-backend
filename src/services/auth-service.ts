@@ -9,7 +9,16 @@ export const getSupabaseClient = () => {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
     throw new Error('SUPABASE_URL and SUPABASE_KEY environment variables are required');
   }
-  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY, {
+    global: {
+      fetch: (input, init) => {
+        const controller = new AbortController();
+        const id = setTimeout(() => controller.abort(), 12000);
+        return fetch(input as URL, { ...init, signal: controller.signal })
+          .finally(() => clearTimeout(id));
+      },
+    },
+  });
 };
 
 type SupabaseAuthErrShape = {
@@ -47,14 +56,21 @@ const mapSupabaseSignInError = (error: SupabaseAuthErrShape): AppError => {
   return createError(error.message || 'Could not sign in', 500);
 };
 
+const sanitizeMsg = (msg: string | undefined, fallback: string) =>
+  msg && msg !== '{}' ? msg : fallback;
+
 const mapSupabaseSignUpError = (error: SupabaseAuthErrShape): AppError => {
-  if (error.code === 'user_already_exists') {
+  if (error.code === 'user_already_exists' || error.code === 'email_exists') {
     return createError('An account with this email already exists', 409);
   }
-  if (typeof error.status === 'number' && error.status >= 400 && error.status < 500) {
-    return createError(error.message || 'Could not create account', 400);
+  if (error.code === 'over_email_send_rate_limit') {
+    return createError('Too many sign-up attempts. Please wait a few minutes and try again.', 429);
   }
-  return createError(error.message || 'Could not create account', 500);
+  if (typeof error.status === 'number' && error.status >= 400 && error.status < 500) {
+    const status = error.status === 429 ? 429 : 400;
+    return createError(sanitizeMsg(error.message, 'Could not create account'), status);
+  }
+  return createError(sanitizeMsg(error.message, 'Could not create account. Please try again.'), 500);
 };
 
 export const authService = {

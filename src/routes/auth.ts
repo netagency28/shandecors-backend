@@ -218,14 +218,17 @@ router.post('/profile', authMiddleware, async (req: AuthenticatedRequest, res, n
       return res.status(401).json({ message: 'Unauthorized' });
     }
 
-    const data = profileSchema.parse(req.body ?? {});
-    const prisma = getPrismaClient();
+    const parsed = profileSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors.map((e) => e.message).join('; ') });
+    }
 
+    const prisma = getPrismaClient();
     const updated = await prisma.user.update({
       where: { email: req.user.email },
       data: {
-        ...(data.name !== undefined ? { name: data.name } : {}),
-        ...(data.phone !== undefined ? { phone: data.phone } : {}),
+        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+        ...(parsed.data.phone !== undefined ? { phone: parsed.data.phone } : {}),
       },
     });
 

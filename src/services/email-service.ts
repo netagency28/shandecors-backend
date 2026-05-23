@@ -1,5 +1,5 @@
 import { Resend } from 'resend';
-import { createClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from './auth-service';
 
 const getResend = () => {
   if (!process.env.RESEND_API_KEY) {
@@ -11,11 +11,7 @@ const getResend = () => {
 export const emailService = {
   async sendPasswordResetEmail(email: string) {
     try {
-      if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-        throw new Error('Supabase credentials not configured');
-      }
-
-      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+      const supabase = getSupabaseClient();
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
       const { error: supabaseError } = await supabase.auth.resetPasswordForEmail(email, {
