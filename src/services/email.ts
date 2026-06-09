@@ -12,7 +12,7 @@ type OrderEmailPayload = {
 
 const BRAND = {
   email: 'shandecor01@gmail.com',
-  phone: '+91 94420 42466',
+  phone: '+91 90033 42466',
   address: '5th Cross Street, Periya Pudur, Salem, Tamil Nadu – 636016',
 } as const;
 
