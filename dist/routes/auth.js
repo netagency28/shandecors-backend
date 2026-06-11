@@ -5,25 +5,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const zod_1 = require("zod");
-const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
 const auth_service_1 = require("../services/auth-service");
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
-const strictAuthLimiter = (0, express_rate_limit_1.default)({
-    windowMs: 15 * 60 * 1000,
-    max: 10,
-    message: { error: 'Too many attempts. Please try again in 15 minutes.' },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-const resetPasswordLimiter = (0, express_rate_limit_1.default)({
-    windowMs: 60 * 60 * 1000,
-    max: 5,
-    message: { error: 'Too many password reset requests. Please try again in an hour.' },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
 const signUpSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     password: zod_1.z.string().min(6),
@@ -76,20 +62,37 @@ const buildUserResponse = (user, localUser) => ({
     name: localUser?.name || user.user_metadata?.name || null,
     role: localUser?.role || user.user_metadata?.role || 'CUSTOMER',
 });
-router.post('/signup', strictAuthLimiter, async (req, res, next) => {
+const serializeAuthUser = (user) => {
+    if (!user)
+        return null;
+    return {
+        id: user.id,
+        email: user.email,
+        name: user.user_metadata?.name || null,
+        role: user.user_metadata?.role || 'CUSTOMER',
+    };
+};
+router.post('/signup', rateLimiters_1.authLimiter, async (req, res, next) => {
     try {
         const validatedData = signUpSchema.parse(req.body);
         const data = await auth_service_1.authService.signUp(validatedData.email, validatedData.password, validatedData.name);
         if (data.user) {
             await safeUpsertLocalUser(data.user);
         }
-        return res.status(201).json({ user: data.user, session: data.session });
+        const response = {
+            user: serializeAuthUser(data.user),
+            session: data.session,
+        };
+        if (!data.session) {
+            response.message = 'Account created! Please check your email to verify your account.';
+        }
+        return res.status(201).json(response);
     }
     catch (error) {
         return next(error);
     }
 });
-router.post('/signin', strictAuthLimiter, async (req, res, next) => {
+router.post('/signin', rateLimiters_1.authLimiter, async (req, res, next) => {
     try {
         const validatedData = signInSchema.parse(req.body);
         const data = await auth_service_1.authService.signIn(validatedData.email, validatedData.password);
@@ -195,13 +198,16 @@ router.post('/profile', auth_1.authMiddleware, async (req, res, next) => {
         if (!req.user?.email) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
-        const data = profileSchema.parse(req.body ?? {});
+        const parsed = profileSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+            return res.status(400).json({ message: parsed.error.errors.map((e) => e.message).join('; ') });
+        }
         const prisma = (0, database_1.default)();
         const updated = await prisma.user.update({
             where: { email: req.user.email },
             data: {
-                ...(data.name !== undefined ? { name: data.name } : {}),
-                ...(data.phone !== undefined ? { phone: data.phone } : {}),
+                ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+                ...(parsed.data.phone !== undefined ? { phone: parsed.data.phone } : {}),
             },
         });
         return res.json({
@@ -217,19 +223,14 @@ router.post('/profile', auth_1.authMiddleware, async (req, res, next) => {
         return next(error);
     }
 });
-// Reset password
-router.post('/reset-password', resetPasswordLimiter, async (req, res) => {
+router.post('/reset-password', rateLimiters_1.authLimiter, async (req, res, next) => {
     try {
         const validatedData = resetPasswordSchema.parse(req.body);
         await auth_service_1.authService.resetPasswordForEmail(validatedData.email);
-        res.json({ message: 'Password reset link sent successfully' });
+        return res.json({ message: 'Password reset link sent successfully' });
     }
     catch (error) {
-        console.error('Reset password error:', error);
-        if (error instanceof zod_1.z.ZodError) {
-            return res.status(400).json({ error: 'Invalid input', details: error.errors });
-        }
-        res.status(500).json({ error: 'Failed to send reset link' });
+        return next(error);
     }
 });
 exports.default = router;

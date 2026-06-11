@@ -10,6 +10,7 @@ import * as Sentry from '@sentry/node';
 
 import { errorHandler } from './middleware/errorHandler';
 import routes from './routes';
+import sitemapRouter from './routes/sitemap';
 import { getPrismaClient, disconnectPrisma } from './services/database';
 
 // Load environment variables
@@ -26,6 +27,13 @@ const validateEnv = () => {
 };
 
 validateEnv();
+
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY is not set — signup confirmation and password reset emails will not work.');
+}
+if (!process.env.RESEND_API_KEY || !process.env.SENDER_EMAIL) {
+  console.warn('⚠️  RESEND_API_KEY or SENDER_EMAIL is not set — transactional emails will not be sent.');
+}
 
 const app = express();
 
@@ -139,6 +147,9 @@ app.use(Sentry.Handlers.requestHandler());
 app.use(helmet());
 app.use(compression());
 app.use(httpLogger);
+
+// SEO sitemap — before rate limiter so crawlers are not throttled
+app.use(sitemapRouter);
 
 // Health check must be before rate limiter — Render pings every 5s and would exhaust the limit
 app.get('/health', async (_req, res) => {

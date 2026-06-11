@@ -7,6 +7,7 @@ const express_1 = __importDefault(require("express"));
 const client_1 = require("@prisma/client");
 const auth_1 = require("../middleware/auth");
 const zod_1 = require("zod");
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = express_1.default.Router();
 const prisma = new client_1.PrismaClient();
 // Validation schemas
@@ -14,7 +15,7 @@ const addToWishlistSchema = zod_1.z.object({
     productId: zod_1.z.string(),
 });
 // Get user's wishlist
-router.get('/', auth_1.authenticateToken, async (req, res) => {
+router.get('/', rateLimiters_1.userLimiter, auth_1.authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         const { page = 1, limit = 20 } = req.query;
@@ -59,7 +60,7 @@ router.get('/', auth_1.authenticateToken, async (req, res) => {
     }
 });
 // Check if product is in user's wishlist
-router.get('/check/:productId', auth_1.authenticateToken, async (req, res) => {
+router.get('/check/:productId', rateLimiters_1.userLimiter, auth_1.authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
         const { productId } = req.params;

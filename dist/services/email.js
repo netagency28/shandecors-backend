@@ -1,10 +1,44 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendContactAcknowledgementEmail = exports.sendPaymentFailedEmail = exports.sendOrderStatusEmail = exports.sendOrderPlacedEmail = void 0;
+exports.sendContactAcknowledgementEmail = exports.sendPasswordResetEmail = exports.sendSignupConfirmationEmail = exports.sendPaymentFailedEmail = exports.sendOrderStatusEmail = exports.sendOrderPlacedEmail = void 0;
 const resend_1 = require("resend");
+const Sentry = __importStar(require("@sentry/node"));
 const BRAND = {
     email: 'shandecor01@gmail.com',
-    phone: '+91 94420 42466',
+    phone: '+91 90033 42466',
     address: '5th Cross Street, Periya Pudur, Salem, Tamil Nadu – 636016',
 };
 const getResendClient = () => {
@@ -28,25 +62,43 @@ const safeSend = async (to, subject, html) => {
     try {
         const result = await resend.emails.send({ from, to: [to], subject, html });
         if (result?.error) {
-            const isDomainError = result.error?.statusCode === 403 || String(result.error?.message).includes('not verified');
+            const errMsg = String(result.error?.message || '');
+            const statusCode = result.error?.statusCode ?? result.error?.status ?? 0;
+            // Resend rejects non-verified / disallowed sender domains with 403 or 422
+            const isDomainError = statusCode === 403 ||
+                statusCode === 422 ||
+                errMsg.toLowerCase().includes('not verified') ||
+                errMsg.toLowerCase().includes('domain') ||
+                errMsg.toLowerCase().includes('not allowed');
             if (isDomainError && from !== 'onboarding@resend.dev') {
-                console.warn(`Domain not verified for ${from}, retrying with onboarding@resend.dev`);
+                console.warn(`[Email] Sender domain not allowed for "${from}" — retrying with onboarding@resend.dev`);
                 const retry = await resend.emails.send({ from: 'onboarding@resend.dev', to: [to], subject, html });
                 if (retry?.error) {
-                    console.error('Resend email error (fallback):', retry.error);
+                    Sentry.captureMessage(`Resend fallback error: ${retry.error?.message}`, {
+                        level: 'error',
+                        tags: { email_type: subject },
+                        extra: { error: retry.error },
+                    });
+                    console.error('[Email] Fallback send failed:', retry.error);
                 }
                 else {
-                    console.info(`Email sent (fallback) to ${to}. id=${retry?.data?.id || 'n/a'}`);
+                    console.info(`[Email] Sent via fallback sender. id=${retry?.data?.id || 'n/a'} to=<redacted>`);
                 }
                 return;
             }
-            console.error('Resend email error:', result.error);
+            Sentry.captureMessage(`Resend error: ${errMsg}`, {
+                level: 'error',
+                tags: { email_type: subject },
+                extra: { error: result.error, statusCode },
+            });
+            console.error(`[Email] Send failed (status=${statusCode}):`, result.error);
             return;
         }
-        console.info(`Email sent successfully to ${to}. id=${result?.data?.id || 'n/a'}`);
+        console.info(`[Email] Sent successfully. id=${result?.data?.id || 'n/a'}`);
     }
     catch (error) {
-        console.error('Resend email failed:', error);
+        Sentry.captureException(error, { tags: { email_type: subject } });
+        console.error('[Email] Unexpected error:', error);
     }
 };
 const emailLayout = (body) => `
@@ -206,6 +258,37 @@ const sendPaymentFailedEmail = async (payload) => {
     await safeSend(payload.customerEmail, `Payment Failed for Your Shan Decors Order`, html);
 };
 exports.sendPaymentFailedEmail = sendPaymentFailedEmail;
+const sendSignupConfirmationEmail = async (email, name, confirmUrl) => {
+    const displayName = name || email.split('@')[0];
+    const html = emailLayout(`
+    <p>Dear ${displayName},</p>
+    <p>Welcome to Shan Decors! Thank you for creating an account with us.</p>
+    <p>Please confirm your email address to activate your account and start exploring our handcrafted home décor collection.</p>
+    <p style="margin:28px 0;text-align:center;">
+      <a href="${confirmUrl}" style="display:inline-block;background:#2d2926;color:#ffffff;padding:14px 32px;text-decoration:none;font-size:13px;letter-spacing:1px;text-transform:uppercase;">Confirm Email Address</a>
+    </p>
+    <p style="font-size:13px;color:#8b7355;">If the button doesn't work, copy and paste this link into your browser:<br>
+    <a href="${confirmUrl}" style="color:#8b7355;word-break:break-all;">${confirmUrl}</a></p>
+    <p style="font-size:13px;color:#bbb;">If you didn't create this account, you can safely ignore this email.</p>
+  `);
+    await safeSend(email, 'Confirm Your Shan Decors Account 🌿', html);
+};
+exports.sendSignupConfirmationEmail = sendSignupConfirmationEmail;
+const sendPasswordResetEmail = async (email, resetUrl) => {
+    const html = emailLayout(`
+    <p>Hello,</p>
+    <p>We received a request to reset the password for your Shan Decors account.</p>
+    <p>Click the button below to choose a new password. This link expires in 24 hours.</p>
+    <p style="margin:28px 0;text-align:center;">
+      <a href="${resetUrl}" style="display:inline-block;background:#2d2926;color:#ffffff;padding:14px 32px;text-decoration:none;font-size:13px;letter-spacing:1px;text-transform:uppercase;">Reset Password</a>
+    </p>
+    <p style="font-size:13px;color:#8b7355;">If the button doesn't work, copy and paste this link into your browser:<br>
+    <a href="${resetUrl}" style="color:#8b7355;word-break:break-all;">${resetUrl}</a></p>
+    <p style="font-size:13px;color:#bbb;">If you didn't request a password reset, you can safely ignore this email.</p>
+  `);
+    await safeSend(email, 'Reset Your Shan Decors Password', html);
+};
+exports.sendPasswordResetEmail = sendPasswordResetEmail;
 const sendContactAcknowledgementEmail = async (name, email) => {
     const html = emailLayout(`
     <p>Dear ${name},</p>

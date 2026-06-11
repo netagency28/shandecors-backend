@@ -7,12 +7,13 @@ const express_1 = require("express");
 const zod_1 = require("zod");
 const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
 const updateProfileSchema = zod_1.z.object({
     name: zod_1.z.string().trim().min(1).max(100).optional(),
     phone: zod_1.z.string().trim().min(6).max(20).optional(),
 });
-router.get('/profile', auth_1.authMiddleware, async (req, res) => {
+router.get('/profile', rateLimiters_1.userLimiter, auth_1.authMiddleware, async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
         const user = await prisma.user.findUnique({

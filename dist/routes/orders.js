@@ -6,6 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
+const rateLimiters_1 = require("../middleware/rateLimiters");
+const email_1 = require("../services/email");
 const router = (0, express_1.Router)();
 const statusToClient = (status) => status.toLowerCase();
 const paymentToClient = (status) => {
@@ -61,7 +63,7 @@ const getShippingAddress = (value) => {
     return value;
 };
 const getString = (value) => (typeof value === 'string' ? value : '');
-router.get('/', auth_1.authMiddleware, async (req, res) => {
+router.get('/', rateLimiters_1.userLimiter, auth_1.authMiddleware, async (req, res) => {
     try {
         if (!req.user?.id)
             return res.status(401).json({ message: 'Unauthorized' });
@@ -77,7 +79,7 @@ router.get('/', auth_1.authMiddleware, async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch orders' });
     }
 });
-router.get('/:orderId', auth_1.authMiddleware, async (req, res) => {
+router.get('/:orderId', rateLimiters_1.userLimiter, auth_1.authMiddleware, async (req, res) => {
     try {
         if (!req.user?.id)
             return res.status(401).json({ message: 'Unauthorized' });
@@ -94,7 +96,7 @@ router.get('/:orderId', auth_1.authMiddleware, async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch order' });
     }
 });
-router.post('/', auth_1.authMiddleware, async (req, res) => {
+router.post('/', rateLimiters_1.checkoutLimiter, auth_1.authMiddleware, async (req, res) => {
     try {
         if (!req.user?.id)
             return res.status(401).json({ message: 'Unauthorized' });
@@ -136,13 +138,25 @@ router.post('/', auth_1.authMiddleware, async (req, res) => {
             },
             include: { items: true, user: true },
         });
+        // Send order receipt — fire-and-forget so email failure never blocks the response
+        const customerEmail = getString(created.user?.email) || getString(getShippingAddress(created.shippingAddress).email);
+        if (customerEmail) {
+            (0, email_1.sendOrderPlacedEmail)({
+                orderId: created.id,
+                orderNumber: created.orderNumber,
+                customerName: getString(created.user?.name) || getString(getShippingAddress(created.shippingAddress).full_name) || 'Customer',
+                customerEmail,
+                total: Number(created.total || 0),
+                status: created.paymentStatus,
+            }).catch((e) => console.error('[Orders] Placed email failed (non-fatal):', e));
+        }
         return res.status(201).json(toClientOrder(created));
     }
     catch (error) {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to create order' });
     }
 });
-router.post('/guest', async (req, res) => {
+router.post('/guest', rateLimiters_1.checkoutLimiter, async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
         const body = req.body || {};
@@ -188,6 +202,17 @@ router.post('/guest', async (req, res) => {
             },
             include: { items: true, user: true },
         });
+        const guestEmail = getString(created.user?.email) || getString(getShippingAddress(created.shippingAddress).email);
+        if (guestEmail) {
+            (0, email_1.sendOrderPlacedEmail)({
+                orderId: created.id,
+                orderNumber: created.orderNumber,
+                customerName: getString(created.user?.name) || getString(getShippingAddress(created.shippingAddress).full_name) || 'Customer',
+                customerEmail: guestEmail,
+                total: Number(created.total || 0),
+                status: created.paymentStatus,
+            }).catch((e) => console.error('[Orders] Guest placed email failed (non-fatal):', e));
+        }
         return res.status(201).json(toClientOrder(created));
     }
     catch (error) {

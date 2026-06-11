@@ -9,8 +9,9 @@ const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
 const contentStore_1 = require("../services/contentStore");
 const email_1 = require("../services/email");
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
-router.use(auth_1.authMiddleware, auth_1.adminMiddleware);
+router.use(rateLimiters_1.adminLimiter, auth_1.authMiddleware, auth_1.adminMiddleware);
 const toClientProduct = (product) => ({
     id: product.id,
     name: product.name,

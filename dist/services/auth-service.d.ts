@@ -1,4 +1,5 @@
 export declare const getSupabaseClient: () => import("@supabase/supabase-js").SupabaseClient<any, "public", "public", any, any>;
+export declare const getSupabaseAdminClient: () => import("@supabase/supabase-js").SupabaseClient<any, "public", "public", any, any> | null;
 export declare const authService: {
     signIn(email: string, password: string): Promise<{
         user: {
@@ -44,8 +45,8 @@ export declare const authService: {
             };
         };
     } | {
-        user: import("@supabase/supabase-js").AuthUser | null;
-        session: import("@supabase/supabase-js").AuthSession | null;
+        user: import("@supabase/supabase-js").AuthUser;
+        session: null;
     }>;
     resetPasswordForEmail(email: string): Promise<{
         data: null;

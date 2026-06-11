@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = __importDefault(require("../services/database"));
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
 const toClientProduct = (product) => ({
     id: product.id,
@@ -30,7 +31,7 @@ const toClientProduct = (product) => ({
     created_at: product.createdAt,
     updated_at: product.updatedAt,
 });
-router.get('/', async (req, res) => {
+router.get('/', rateLimiters_1.browseLimiter, async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
         const limit = Math.min(Number(req.query.limit) || 20, 100);
@@ -78,7 +79,7 @@ router.get('/', async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch products' });
     }
 });
-router.get('/id/:id', async (req, res) => {
+router.get('/id/:id', rateLimiters_1.browseLimiter, async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
         const product = await prisma.product.findFirst({
@@ -94,7 +95,7 @@ router.get('/id/:id', async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch product' });
     }
 });
-router.get('/:slug', async (req, res) => {
+router.get('/:slug', rateLimiters_1.browseLimiter, async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
         const product = await prisma.product.findFirst({

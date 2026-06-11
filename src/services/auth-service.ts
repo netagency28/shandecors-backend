@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { mockAuth } from '../mocks/auth-mock';
 import { emailService } from './email-service';
+import { sendSignupConfirmationEmail } from './email';
 import { createError, type AppError } from '../middleware/errorHandler';
 
 const USE_MOCK_AUTH = process.env.USE_MOCK_AUTH === 'true' || !process.env.SUPABASE_URL?.includes('supabase.co');
@@ -21,7 +22,7 @@ export const getSupabaseClient = () => {
   });
 };
 
-const getSupabaseAdminClient = () => {
+export const getSupabaseAdminClient = () => {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!process.env.SUPABASE_URL || !serviceRoleKey) return null;
   return createClient(process.env.SUPABASE_URL, serviceRoleKey, {
@@ -29,6 +30,8 @@ const getSupabaseAdminClient = () => {
     global: { fetch: supabaseFetch },
   });
 };
+
+const getFrontendUrl = () => process.env.FRONTEND_URL || 'http://localhost:3000';
 
 type SupabaseAuthErrShape = {
   message: string;
@@ -88,6 +91,9 @@ const mapSupabaseSignUpError = (error: SupabaseAuthErrShape): AppError => {
   if (error.code === 'weak_password') {
     return createError('Password is too weak. Use at least 6 characters.', 400);
   }
+  if (error.code === 'email_address_invalid') {
+    return createError('Please enter a valid email address', 400);
+  }
   if (typeof error.status === 'number' && error.status >= 400 && error.status < 500) {
     const status = error.status === 429 ? 429 : 400;
     return createError(sanitizeMsg(error.message, 'Could not create account'), status);
@@ -125,44 +131,43 @@ export const authService = {
     }
 
     try {
-      const supabase = getSupabaseClient();
       const admin = getSupabaseAdminClient();
+      const frontendUrl = getFrontendUrl();
 
-      // Use admin API to auto-confirm email — avoids Supabase's built-in confirmation
-      // email flow (separate from Resend used for order emails in this app).
-      if (admin) {
-        const { data: created, error: createError_ } = await admin.auth.admin.createUser({
-          email,
-          password,
-          email_confirm: true,
-          user_metadata: { name },
-        });
-
-        if (createError_) {
-          throw mapSupabaseSignUpError(createError_);
-        }
-
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-        if (signInError) {
-          throw mapSupabaseSignInError(signInError);
-        }
-
-        return {
-          user: data.user ?? created.user,
-          session: data.session,
-        };
+      if (!admin) {
+        throw createError(
+          'Sign up is temporarily unavailable. Please contact support.',
+          503,
+        );
       }
 
-      const { data, error } = await supabase.auth.signUp({
+      // Create unconfirmed user and generate confirmation link via admin API.
+      // Email is delivered through Resend (same provider as order emails).
+      const { data: linkData, error: linkError } = await admin.auth.admin.generateLink({
+        type: 'signup',
         email,
         password,
-        options: { data: { name } },
+        options: {
+          redirectTo: `${frontendUrl}/auth/callback`,
+          data: { name },
+        },
       });
 
-      if (error) {
-        throw mapSupabaseSignUpError(error);
+      if (linkError) {
+        throw mapSupabaseSignUpError(linkError);
       }
-      return data;
+
+      const confirmUrl = linkData?.properties?.action_link;
+      if (!confirmUrl) {
+        throw createError('Could not generate email confirmation link. Please try again.', 500);
+      }
+
+      await sendSignupConfirmationEmail(email, name, confirmUrl);
+
+      return {
+        user: linkData.user,
+        session: null,
+      };
     } catch (error) {
       if (isOperationalHttpError(error)) throw error;
       if (isSupabaseTransportFailure(error)) {
@@ -174,12 +179,10 @@ export const authService = {
   },
 
   async resetPasswordForEmail(email: string) {
-    console.log(`Sending password reset email to: ${email}`);
-
     const emailResult = await emailService.sendPasswordResetEmail(email);
 
     if (!emailResult.success) {
-      throw new Error(`Failed to send email: ${emailResult.error}`);
+      throw createError(emailResult.error || 'Failed to send reset link', 500);
     }
 
     return { data: null, error: null };

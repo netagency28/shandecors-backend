@@ -70,6 +70,16 @@ const buildUserResponse = (
   role: localUser?.role || user.user_metadata?.role || 'CUSTOMER',
 });
 
+const serializeAuthUser = (user: { id: string; email?: string; user_metadata?: { name?: string; role?: string } } | null) => {
+  if (!user) return null;
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.user_metadata?.name || null,
+    role: user.user_metadata?.role || 'CUSTOMER',
+  };
+};
+
 router.post('/signup', authLimiter, async (req, res, next) => {
   try {
     const validatedData = signUpSchema.parse(req.body);
@@ -84,7 +94,16 @@ router.post('/signup', authLimiter, async (req, res, next) => {
       await safeUpsertLocalUser(data.user);
     }
 
-    return res.status(201).json({ user: data.user, session: data.session });
+    const response: Record<string, unknown> = {
+      user: serializeAuthUser(data.user),
+      session: data.session,
+    };
+
+    if (!data.session) {
+      response.message = 'Account created! Please check your email to verify your account.';
+    }
+
+    return res.status(201).json(response);
   } catch (error) {
     return next(error);
   }
@@ -245,20 +264,15 @@ router.post('/profile', authMiddleware, async (req: AuthenticatedRequest, res, n
   }
 });
 
-// Reset password
-router.post('/reset-password', authLimiter, async (req, res) => {
+router.post('/reset-password', authLimiter, async (req, res, next) => {
   try {
     const validatedData = resetPasswordSchema.parse(req.body);
 
     await authService.resetPasswordForEmail(validatedData.email);
 
-    res.json({ message: 'Password reset link sent successfully' });
+    return res.json({ message: 'Password reset link sent successfully' });
   } catch (error) {
-    console.error('Reset password error:', error);
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ error: 'Invalid input', details: error.errors });
-    }
-    res.status(500).json({ error: 'Failed to send reset link' });
+    return next(error);
   }
 });
 

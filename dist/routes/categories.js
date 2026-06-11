@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = __importDefault(require("../services/database"));
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
 const toClientCategory = (category) => ({
     id: category.id,
@@ -16,7 +17,7 @@ const toClientCategory = (category) => ({
     created_at: category.createdAt,
     updated_at: category.updatedAt,
 });
-router.get('/', async (_req, res) => {
+router.get('/', rateLimiters_1.browseLimiter, async (_req, res) => {
     try {
         const prisma = (0, database_1.default)();
         const categories = await prisma.category.findMany({
@@ -29,7 +30,7 @@ router.get('/', async (_req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch categories' });
     }
 });
-router.get('/:slug', async (req, res) => {
+router.get('/:slug', rateLimiters_1.browseLimiter, async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
         const category = await prisma.category.findUnique({ where: { slug: req.params.slug } });

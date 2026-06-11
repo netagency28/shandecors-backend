@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
 const toCartItem = (item) => ({
     id: item.id,
@@ -45,7 +46,7 @@ router.get('/', auth_1.authMiddleware, async (req, res) => {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to fetch cart' });
     }
 });
-router.post('/', auth_1.authMiddleware, async (req, res) => {
+router.post('/', rateLimiters_1.checkoutLimiter, auth_1.authMiddleware, async (req, res) => {
     try {
         if (!req.user?.id)
             return res.status(401).json({ message: 'Unauthorized' });

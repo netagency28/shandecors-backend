@@ -253,6 +253,37 @@ export const sendPaymentFailedEmail = async (
   await safeSend(payload.customerEmail, `Payment Failed for Your Shan Decors Order`, html);
 };
 
+export const sendSignupConfirmationEmail = async (email: string, name: string | undefined, confirmUrl: string) => {
+  const displayName = name || email.split('@')[0];
+  const html = emailLayout(`
+    <p>Dear ${displayName},</p>
+    <p>Welcome to Shan Decors! Thank you for creating an account with us.</p>
+    <p>Please confirm your email address to activate your account and start exploring our handcrafted home décor collection.</p>
+    <p style="margin:28px 0;text-align:center;">
+      <a href="${confirmUrl}" style="display:inline-block;background:#2d2926;color:#ffffff;padding:14px 32px;text-decoration:none;font-size:13px;letter-spacing:1px;text-transform:uppercase;">Confirm Email Address</a>
+    </p>
+    <p style="font-size:13px;color:#8b7355;">If the button doesn't work, copy and paste this link into your browser:<br>
+    <a href="${confirmUrl}" style="color:#8b7355;word-break:break-all;">${confirmUrl}</a></p>
+    <p style="font-size:13px;color:#bbb;">If you didn't create this account, you can safely ignore this email.</p>
+  `);
+  await safeSend(email, 'Confirm Your Shan Decors Account 🌿', html);
+};
+
+export const sendPasswordResetEmail = async (email: string, resetUrl: string) => {
+  const html = emailLayout(`
+    <p>Hello,</p>
+    <p>We received a request to reset the password for your Shan Decors account.</p>
+    <p>Click the button below to choose a new password. This link expires in 24 hours.</p>
+    <p style="margin:28px 0;text-align:center;">
+      <a href="${resetUrl}" style="display:inline-block;background:#2d2926;color:#ffffff;padding:14px 32px;text-decoration:none;font-size:13px;letter-spacing:1px;text-transform:uppercase;">Reset Password</a>
+    </p>
+    <p style="font-size:13px;color:#8b7355;">If the button doesn't work, copy and paste this link into your browser:<br>
+    <a href="${resetUrl}" style="color:#8b7355;word-break:break-all;">${resetUrl}</a></p>
+    <p style="font-size:13px;color:#bbb;">If you didn't request a password reset, you can safely ignore this email.</p>
+  `);
+  await safeSend(email, 'Reset Your Shan Decors Password', html);
+};
+
 export const sendContactAcknowledgementEmail = async (name: string, email: string) => {
   const html = emailLayout(`
     <p>Dear ${name},</p>
