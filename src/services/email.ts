@@ -117,18 +117,30 @@ const orderTable = (orderNumber: string, total: number, extra?: string) => `
   </table>
 `;
 
+const paymentStatusLabel = (status: string) => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized.includes('cod')) return 'Cash on Delivery';
+  if (normalized === 'completed' || normalized === 'paid') return 'Paid';
+  if (normalized === 'pending' || normalized === 'processing') return 'Awaiting payment';
+  if (normalized === 'failed') return 'Payment failed';
+  return status || 'Pending';
+};
+
+/** Reserved for COD / pay-later flows — not used for online checkout (Cashfree). */
 export const sendOrderPlacedEmail = async (payload: OrderEmailPayload) => {
-  const paymentLabel = String(payload.status).toLowerCase().includes('cod') ? 'Cash on Delivery' : 'Paid';
+  const paymentLabel = paymentStatusLabel(payload.status);
   const html = emailLayout(`
     <p>Dear ${payload.customerName || 'Customer'},</p>
     <p>Thank you for choosing Shan Decors.</p>
-    <p>We're delighted to let you know that your order has been successfully placed and is now being prepared with care by our team.</p>
+    <p>We've received your order. ${paymentLabel === 'Awaiting payment' ? 'Please complete payment to confirm your order.' : 'Our team will begin preparing it with care.'}</p>
     ${orderTable(payload.orderNumber, payload.total, paymentLabel)}
-    <p>As every piece is thoughtfully handcrafted, your order will now move into processing and preparation. We'll keep you updated throughout the journey via email, SMS, and WhatsApp.</p>
     <p>If you have any questions regarding your order, feel free to reach out to us anytime at <a href="mailto:${BRAND.email}" style="color:#8b7355;">${BRAND.email}</a>.</p>
     <p>Thank you for supporting handmade craftsmanship and being a part of our journey.</p>
   `);
-  await safeSend(payload.customerEmail, `Your Shan Decors Order Has Been Confirmed 🌿`, html);
+  const subject = paymentLabel === 'Awaiting payment'
+    ? `Your Shan Decors Order — Complete Payment 🌿`
+    : `Your Shan Decors Order Has Been Received 🌿`;
+  await safeSend(payload.customerEmail, subject, html);
 };
 
 const statusEmailContent = (

@@ -1,7 +1,10 @@
 import { Router } from 'express';
 import getPrismaClient from '../services/database';
+import { authMiddleware, adminMiddleware } from '../middleware/auth';
 
 const router = Router();
+
+const isProduction = () => process.env.NODE_ENV === 'production';
 
 const slugify = (value: string) =>
   value
@@ -10,7 +13,15 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
 
-router.post('/', async (_req, res) => {
+router.post('/', authMiddleware, adminMiddleware, async (req, res) => {
+  if (isProduction()) {
+    const seedSecret = process.env.SEED_SECRET?.trim();
+    const provided = String(req.headers['x-seed-secret'] || '');
+    if (!seedSecret || provided !== seedSecret) {
+      return res.status(404).json({ message: 'Not found' });
+    }
+  }
+
   try {
     const prisma = getPrismaClient();
 

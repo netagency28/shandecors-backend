@@ -6,37 +6,43 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.adminMiddleware = exports.authenticateToken = exports.authMiddleware = void 0;
 const supabase_js_1 = require("@supabase/supabase-js");
 const database_1 = __importDefault(require("../services/database"));
+const auth_cookies_1 = require("../services/auth-cookies");
 const getSupabaseClient = () => {
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
         throw new Error('SUPABASE_URL and SUPABASE_KEY environment variables are required');
     }
     return (0, supabase_js_1.createClient)(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 };
+const resolveRole = (dbRole) => {
+    if (dbRole === 'ADMIN' || dbRole === 'CUSTOMER')
+        return dbRole;
+    return 'CUSTOMER';
+};
 const authMiddleware = async (req, res, next) => {
     try {
         const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        const cookieToken = (0, auth_cookies_1.getAccessTokenFromCookies)(req.cookies || {});
+        const token = authHeader?.startsWith('Bearer ')
+            ? authHeader.substring(7)
+            : cookieToken;
+        if (!token) {
             return res.status(401).json({ message: 'No authorization token provided' });
         }
-        const token = authHeader.substring(7);
         const supabase = getSupabaseClient();
         const { data: { user }, error, } = await supabase.auth.getUser(token);
         if (error || !user || !user.email) {
             return res.status(401).json({ message: 'Invalid or expired token' });
         }
-        let dbUser = null;
-        try {
-            const prisma = (0, database_1.default)();
-            dbUser = await prisma.user.findUnique({ where: { email: user.email } });
-        }
-        catch (dbError) {
-            console.warn('Auth middleware could not load local user profile:', dbError);
+        const prisma = (0, database_1.default)();
+        const dbUser = await prisma.user.findUnique({ where: { email: user.email } });
+        if (!dbUser) {
+            return res.status(401).json({ message: 'User profile not found' });
         }
         req.user = {
-            id: dbUser?.id || user.id,
-            email: user.email,
-            name: dbUser?.name || user.user_metadata?.name || null,
-            role: dbUser?.role || user.user_metadata?.role || 'CUSTOMER',
+            id: dbUser.id,
+            email: dbUser.email,
+            name: dbUser.name || user.user_metadata?.name || null,
+            role: resolveRole(dbUser.role),
         };
         return next();
     }

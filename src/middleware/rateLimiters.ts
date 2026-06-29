@@ -99,10 +99,21 @@ export const webhookLimiter = rateLimit({
 export const aiLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   limit: 20,
-  keyGenerator: (req: Request) => (req as any).user?.id || ipKeyGenerator(req),
+  keyGenerator: (req: Request) => (req as any).user?.id || ipKeyGenerator(req.ip || 'unknown'),
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipOptions,
   store: makeStore('ai'),
   handler: makeHandler('AI usage limit reached. Please try again in an hour.', 60 * 60 * 1000),
+});
+
+// 8. Contact form
+export const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipOptions,
+  store: makeStore('contact'),
+  handler: makeHandler('Too many contact requests. Please try again later.', 60 * 60 * 1000),
 });

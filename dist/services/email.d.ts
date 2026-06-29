@@ -6,6 +6,7 @@ type OrderEmailPayload = {
     total: number;
     status: string;
 };
+/** Reserved for COD / pay-later flows — not used for online checkout (Cashfree). */
 export declare const sendOrderPlacedEmail: (payload: OrderEmailPayload) => Promise<void>;
 export declare const sendOrderStatusEmail: (payload: Omit<OrderEmailPayload, "status"> & {
     oldStatus?: string;

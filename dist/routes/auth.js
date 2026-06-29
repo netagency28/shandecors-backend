@@ -8,6 +8,7 @@ const zod_1 = require("zod");
 const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
 const auth_service_1 = require("../services/auth-service");
+const auth_cookies_1 = require("../services/auth-cookies");
 const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
 const signUpSchema = zod_1.z.object({
@@ -26,24 +27,33 @@ const profileSchema = zod_1.z.object({
     name: zod_1.z.string().trim().min(1).optional(),
     phone: zod_1.z.string().trim().min(6).optional(),
 });
+const updatePasswordSchema = zod_1.z.object({
+    password: zod_1.z.string().min(8),
+});
+const sessionExchangeSchema = zod_1.z.object({
+    access_token: zod_1.z.string().min(1),
+    refresh_token: zod_1.z.string().optional(),
+});
 const upsertLocalUser = async (user) => {
     if (!user.email)
         return null;
     const prisma = (0, database_1.default)();
     const existing = await prisma.user.findUnique({ where: { email: user.email } });
-    const role = existing?.role || user.user_metadata?.role || 'CUSTOMER';
-    return prisma.user.upsert({
-        where: { email: user.email },
-        update: {
-            name: user.user_metadata?.name || existing?.name || user.email.split('@')[0],
-            role,
-            updatedAt: new Date(),
-        },
-        create: {
+    if (existing) {
+        return prisma.user.update({
+            where: { email: user.email },
+            data: {
+                name: user.user_metadata?.name || existing.name || user.email.split('@')[0],
+                updatedAt: new Date(),
+            },
+        });
+    }
+    return prisma.user.create({
+        data: {
             id: user.id,
             email: user.email,
             name: user.user_metadata?.name || user.email.split('@')[0],
-            role,
+            role: 'CUSTOMER',
         },
     });
 };
@@ -60,28 +70,32 @@ const buildUserResponse = (user, localUser) => ({
     id: localUser?.id || user.id,
     email: user.email,
     name: localUser?.name || user.user_metadata?.name || null,
-    role: localUser?.role || user.user_metadata?.role || 'CUSTOMER',
+    role: localUser?.role || 'CUSTOMER',
 });
-const serializeAuthUser = (user) => {
+const serializeAuthUser = (user, localUser) => {
     if (!user)
         return null;
     return {
         id: user.id,
         email: user.email,
-        name: user.user_metadata?.name || null,
-        role: user.user_metadata?.role || 'CUSTOMER',
+        name: localUser?.name || user.user_metadata?.name || null,
+        role: localUser?.role || 'CUSTOMER',
     };
 };
 router.post('/signup', rateLimiters_1.authLimiter, async (req, res, next) => {
     try {
         const validatedData = signUpSchema.parse(req.body);
         const data = await auth_service_1.authService.signUp(validatedData.email, validatedData.password, validatedData.name);
+        let localUser = null;
         if (data.user) {
-            await safeUpsertLocalUser(data.user);
+            localUser = await safeUpsertLocalUser(data.user);
+        }
+        if (data.session) {
+            (0, auth_cookies_1.setAuthCookies)(res, data.session);
         }
         const response = {
-            user: serializeAuthUser(data.user),
-            session: data.session,
+            user: serializeAuthUser(data.user, localUser),
+            authenticated: !!data.session,
         };
         if (!data.session) {
             response.message = 'Account created! Please check your email to verify your account.';
@@ -99,19 +113,66 @@ router.post('/signin', rateLimiters_1.authLimiter, async (req, res, next) => {
         if (!data.user) {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
+        if (!data.session?.access_token) {
+            return res.status(401).json({
+                message: 'Please verify your email before signing in. Check your inbox for the confirmation link.',
+            });
+        }
         const localUser = await safeUpsertLocalUser(data.user);
+        (0, auth_cookies_1.setAuthCookies)(res, data.session);
         return res.json({
             user: buildUserResponse(data.user, localUser),
-            session: data.session,
+            authenticated: true,
+            profile: localUser
+                ? {
+                    id: localUser.id,
+                    email: localUser.email,
+                    name: localUser.name,
+                    phone: localUser.phone,
+                    is_admin: localUser.role === 'ADMIN',
+                }
+                : null,
         });
     }
     catch (error) {
         return next(error);
     }
 });
-router.post('/refresh', async (req, res, next) => {
+router.post('/session', rateLimiters_1.authLimiter, async (req, res, next) => {
     try {
-        const refreshToken = typeof req.body?.refresh_token === 'string' ? req.body.refresh_token : '';
+        const parsed = sessionExchangeSchema.parse(req.body);
+        const supabase = (0, auth_service_1.getSupabaseClient)();
+        const { data, error } = await supabase.auth.setSession({
+            access_token: parsed.access_token,
+            refresh_token: parsed.refresh_token || '',
+        });
+        if (error || !data.user || !data.session) {
+            return res.status(401).json({ message: 'Invalid or expired session' });
+        }
+        const localUser = await safeUpsertLocalUser(data.user);
+        (0, auth_cookies_1.setAuthCookies)(res, data.session);
+        return res.json({
+            user: buildUserResponse(data.user, localUser),
+            authenticated: true,
+            profile: localUser
+                ? {
+                    id: localUser.id,
+                    email: localUser.email,
+                    name: localUser.name,
+                    phone: localUser.phone,
+                    is_admin: localUser.role === 'ADMIN',
+                }
+                : null,
+        });
+    }
+    catch (error) {
+        return next(error);
+    }
+});
+router.post('/refresh', rateLimiters_1.authLimiter, async (req, res, next) => {
+    try {
+        const refreshToken = (0, auth_cookies_1.getRefreshTokenFromCookies)(req.cookies || {}) ||
+            (typeof req.body?.refresh_token === 'string' ? req.body.refresh_token : '');
         if (!refreshToken) {
             return res.status(400).json({ message: 'refresh_token is required' });
         }
@@ -120,26 +181,63 @@ router.post('/refresh', async (req, res, next) => {
             refresh_token: refreshToken,
         });
         if (error || !data.user || !data.session) {
+            (0, auth_cookies_1.clearAuthCookies)(res);
             return res.status(401).json({ message: error?.message || 'Failed to refresh session' });
         }
         const localUser = await safeUpsertLocalUser(data.user);
+        (0, auth_cookies_1.setAuthCookies)(res, data.session);
         return res.json({
             user: buildUserResponse(data.user, localUser),
-            session: data.session,
+            authenticated: true,
         });
     }
     catch (error) {
         return next(error);
     }
 });
-router.post('/signout', async (req, res, next) => {
+router.post('/signout', async (_req, res, next) => {
     try {
+        (0, auth_cookies_1.clearAuthCookies)(res);
         const supabase = (0, auth_service_1.getSupabaseClient)();
-        const { error } = await supabase.auth.signOut();
-        if (error) {
-            return res.status(400).json({ message: error.message });
-        }
+        await supabase.auth.signOut();
         return res.json({ message: 'Signed out successfully' });
+    }
+    catch (error) {
+        return next(error);
+    }
+});
+router.get('/session', async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        const cookieToken = (0, auth_cookies_1.getAccessTokenFromCookies)(req.cookies || {});
+        const token = authHeader?.startsWith('Bearer ')
+            ? authHeader.substring(7)
+            : cookieToken;
+        if (!token) {
+            return res.json({ authenticated: false, user: null, profile: null });
+        }
+        const supabase = (0, auth_service_1.getSupabaseClient)();
+        const { data: { user }, error, } = await supabase.auth.getUser(token);
+        if (error || !user?.email) {
+            (0, auth_cookies_1.clearAuthCookies)(res);
+            return res.json({ authenticated: false, user: null, profile: null });
+        }
+        const prisma = (0, database_1.default)();
+        const dbUser = await prisma.user.findUnique({ where: { email: user.email } });
+        if (!dbUser) {
+            return res.json({ authenticated: false, user: null, profile: null });
+        }
+        return res.json({
+            authenticated: true,
+            user: buildUserResponse(user, dbUser),
+            profile: {
+                id: dbUser.id,
+                email: dbUser.email,
+                name: dbUser.name,
+                phone: dbUser.phone,
+                is_admin: dbUser.role === 'ADMIN',
+            },
+        });
     }
     catch (error) {
         return next(error);
@@ -150,29 +248,10 @@ router.get('/me', auth_1.authMiddleware, async (req, res, next) => {
         if (!req.user?.email) {
             return res.status(401).json({ message: 'Unauthorized' });
         }
-        let user = null;
-        try {
-            const prisma = (0, database_1.default)();
-            user = await prisma.user.findUnique({ where: { email: req.user.email } });
-        }
-        catch (dbError) {
-            console.warn('Could not read local user profile in /auth/me:', dbError);
-        }
+        const prisma = (0, database_1.default)();
+        const user = await prisma.user.findUnique({ where: { email: req.user.email } });
         if (!user) {
-            return res.json({
-                id: req.user.id,
-                email: req.user.email,
-                name: req.user.name || null,
-                phone: null,
-                role: req.user.role,
-                profile: {
-                    id: req.user.id,
-                    email: req.user.email,
-                    name: req.user.name || null,
-                    phone: null,
-                    is_admin: req.user.role === 'ADMIN',
-                },
-            });
+            return res.status(401).json({ message: 'User profile not found' });
         }
         return res.json({
             id: user.id,
@@ -218,6 +297,32 @@ router.post('/profile', auth_1.authMiddleware, async (req, res, next) => {
             role: updated.role,
             is_admin: updated.role === 'ADMIN',
         });
+    }
+    catch (error) {
+        return next(error);
+    }
+});
+router.post('/update-password', rateLimiters_1.authLimiter, auth_1.authMiddleware, async (req, res, next) => {
+    try {
+        if (!req.user?.id) {
+            return res.status(401).json({ message: 'Unauthorized' });
+        }
+        const { password } = updatePasswordSchema.parse(req.body);
+        const admin = (0, auth_service_1.getSupabaseAdminClient)();
+        if (!admin) {
+            return res.status(503).json({ message: 'Password update is not configured' });
+        }
+        const prisma = (0, database_1.default)();
+        const dbUser = await prisma.user.findUnique({ where: { email: req.user.email } });
+        if (!dbUser) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+        const { error } = await admin.auth.admin.updateUserById(dbUser.id, { password });
+        if (error) {
+            return res.status(400).json({ message: error.message || 'Failed to update password' });
+        }
+        (0, auth_cookies_1.clearAuthCookies)(res);
+        return res.json({ message: 'Password updated successfully' });
     }
     catch (error) {
         return next(error);

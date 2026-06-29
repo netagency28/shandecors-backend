@@ -24,18 +24,31 @@ const escapeXml = (value) => value
     .replace(/'/g, '&apos;');
 const buildSitemapXml = async () => {
     const prisma = (0, database_1.default)();
-    const products = await prisma.product.findMany({
-        where: { isActive: true, deletedAt: null },
-        select: { slug: true, updatedAt: true },
-        orderBy: { updatedAt: 'desc' },
-    });
+    const [products, categories] = await Promise.all([
+        prisma.product.findMany({
+            where: { isActive: true, deletedAt: null },
+            select: { slug: true, updatedAt: true },
+            orderBy: { updatedAt: 'desc' },
+        }),
+        prisma.category.findMany({
+            where: { isActive: true },
+            select: { slug: true, updatedAt: true },
+            orderBy: { name: 'asc' },
+        }),
+    ]);
+    const categoryEntries = categories.map((category) => ({
+        loc: `/products?category=${category.slug}`,
+        changefreq: 'weekly',
+        priority: '0.85',
+        lastmod: category.updatedAt.toISOString().split('T')[0],
+    }));
     const productEntries = products.map((product) => ({
         loc: `/products/${product.slug}`,
         changefreq: 'weekly',
         priority: '0.8',
         lastmod: product.updatedAt.toISOString().split('T')[0],
     }));
-    const entries = [...STATIC_PAGES, ...productEntries];
+    const entries = [...STATIC_PAGES, ...categoryEntries, ...productEntries];
     const urls = entries
         .map((entry) => {
         const lastmodTag = entry.lastmod ? `<lastmod>${entry.lastmod}</lastmod>` : '';

@@ -2,7 +2,10 @@ import { Router } from 'express';
 import getPrismaClient from '../services/database';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import { checkoutLimiter, userLimiter } from '../middleware/rateLimiters';
-import { sendOrderPlacedEmail } from '../services/email';
+import { buildOrderAdminPayload, notifyAdminOrderEventSafe } from '../services/admin-notifications';
+import { createCheckoutToken } from '../services/checkout-token';
+import { validateAndPriceOrder } from '../services/order-pricing';
+import { excludeCodOrdersWhere } from '../utils/order-filters';
 
 const router = Router();
 
@@ -56,12 +59,42 @@ const getOrCreateUser = async (email: string, name?: string | null, phone?: stri
 
 const generateOrderNumber = () => `SD-${Date.now().toString().slice(-8)}`;
 
-const getShippingAddress = (value: unknown): Record<string, unknown> => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return value as Record<string, unknown>;
-};
+const createOrderFromRequest = async (params: {
+  userId: string;
+  body: Record<string, unknown>;
+  shippingAddress: unknown;
+  billingAddress: unknown;
+}) => {
+  const { userId, body, shippingAddress, billingAddress } = params;
+  const priced = await validateAndPriceOrder(body.items);
+  const prisma = getPrismaClient();
 
-const getString = (value: unknown) => (typeof value === 'string' ? value : '');
+  return prisma.order.create({
+    data: {
+      userId,
+      orderNumber: generateOrderNumber(),
+      status: 'PENDING',
+      subtotal: priced.subtotal,
+      tax: priced.tax,
+      shipping: priced.shippingFee,
+      total: priced.total,
+      paymentMethod: 'cashfree',
+      paymentStatus: 'PENDING',
+      shippingAddress: shippingAddress as object,
+      billingAddress: billingAddress as object,
+      notes: typeof body.notes === 'string' ? body.notes.slice(0, 1000) : null,
+      items: {
+        create: priced.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+          price: item.unitPrice,
+          productSnapshot: item.productSnapshot,
+        })),
+      },
+    },
+    include: { items: true, user: true },
+  });
+};
 
 router.get('/', userLimiter, authMiddleware, async (req: AuthenticatedRequest, res) => {
   try {
@@ -69,7 +102,7 @@ router.get('/', userLimiter, authMiddleware, async (req: AuthenticatedRequest, r
 
     const prisma = getPrismaClient();
     const orders = await prisma.order.findMany({
-      where: { userId: req.user.id },
+      where: { userId: req.user.id, ...excludeCodOrdersWhere },
       include: { items: true },
       orderBy: { createdAt: 'desc' },
     });
@@ -86,7 +119,7 @@ router.get('/:orderId', userLimiter, authMiddleware, async (req: AuthenticatedRe
 
     const prisma = getPrismaClient();
     const order = await prisma.order.findFirst({
-      where: { id: req.params.orderId, userId: req.user.id },
+      where: { id: req.params.orderId, userId: req.user.id, ...excludeCodOrdersWhere },
       include: { items: true },
     });
 
@@ -101,132 +134,64 @@ router.post('/', checkoutLimiter, authMiddleware, async (req: AuthenticatedReque
   try {
     if (!req.user?.id) return res.status(401).json({ message: 'Unauthorized' });
 
-    const prisma = getPrismaClient();
     const body = req.body || {};
-    const items = Array.isArray(body.items) ? body.items : [];
-    const productIds = items.map((item: any) => item.product_id).filter(Boolean);
-
-    if (productIds.length) {
-      const count = await prisma.product.count({ where: { id: { in: productIds } } });
-      if (count !== productIds.length) {
-        return res.status(400).json({ message: 'One or more product IDs are invalid' });
-      }
-    }
-
-    const created = await prisma.order.create({
-      data: {
-        userId: req.user.id,
-        orderNumber: generateOrderNumber(),
-        status: 'PENDING',
-        subtotal: Number(body.subtotal || 0),
-        tax: Number(body.tax || 0),
-        shipping: Number(body.shipping_fee || body.shipping || 0),
-        total: Number(body.total || 0),
-        paymentMethod: 'cashfree',
-        paymentStatus: 'PENDING',
-        shippingAddress: body.shipping_address || null,
-        billingAddress: body.billing_address || body.shipping_address || null,
-        notes: body.notes || null,
-        items: {
-          create: items.map((item: any) => ({
-            productId: item.product_id,
-            quantity: Number(item.quantity || 1),
-            price: Number(item.price || 0),
-            productSnapshot: {
-              product_name: item.product_name,
-              product_image: item.product_image,
-            },
-          })),
-        },
-      },
-      include: { items: true, user: true },
+    const created = await createOrderFromRequest({
+      userId: req.user.id,
+      body,
+      shippingAddress: body.shipping_address || null,
+      billingAddress: body.billing_address || body.shipping_address || null,
     });
 
-    // Send order receipt — fire-and-forget so email failure never blocks the response
-    const customerEmail = getString(created.user?.email) || getString(getShippingAddress(created.shippingAddress).email);
-    if (customerEmail) {
-      sendOrderPlacedEmail({
-        orderId: created.id,
-        orderNumber: created.orderNumber,
-        customerName: getString(created.user?.name) || getString(getShippingAddress(created.shippingAddress).full_name) || 'Customer',
-        customerEmail,
-        total: Number(created.total || 0),
-        status: created.paymentStatus,
-      }).catch((e) => console.error('[Orders] Placed email failed (non-fatal):', e));
-    }
+    notifyAdminOrderEventSafe(buildOrderAdminPayload(created, 'order_placed'));
 
-    return res.status(201).json(toClientOrder(created));
+    return res.status(201).json({
+      ...toClientOrder(created),
+      checkout_token: createCheckoutToken(created.id),
+    });
   } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to create order' });
+    const message = error instanceof Error ? error.message : 'Failed to create order';
+    const statusCode = message.includes('unavailable') || message.includes('stock') || message.includes('Invalid')
+      ? 400
+      : 500;
+    return res.status(statusCode).json({ message });
   }
 });
 
 router.post('/guest', checkoutLimiter, async (req, res) => {
   try {
-    const prisma = getPrismaClient();
     const body = req.body || {};
     const shipping = body.shipping_address || {};
 
-    const email = shipping.email;
+    const email = typeof shipping.email === 'string' ? shipping.email.trim() : '';
     if (!email) {
       return res.status(400).json({ message: 'Guest checkout requires email' });
     }
 
-    const guest = await getOrCreateUser(email, shipping.full_name, shipping.phone);
+    const guest = await getOrCreateUser(
+      email,
+      typeof shipping.full_name === 'string' ? shipping.full_name : null,
+      typeof shipping.phone === 'string' ? shipping.phone : null,
+    );
 
-    const items = Array.isArray(body.items) ? body.items : [];
-    const productIds = items.map((item: any) => item.product_id).filter(Boolean);
-    if (productIds.length) {
-      const count = await prisma.product.count({ where: { id: { in: productIds } } });
-      if (count !== productIds.length) {
-        return res.status(400).json({ message: 'One or more product IDs are invalid' });
-      }
-    }
-
-    const created = await prisma.order.create({
-      data: {
-        userId: guest.id,
-        orderNumber: generateOrderNumber(),
-        status: 'PENDING',
-        subtotal: Number(body.subtotal || 0),
-        tax: Number(body.tax || 0),
-        shipping: Number(body.shipping_fee || body.shipping || 0),
-        total: Number(body.total || 0),
-        paymentMethod: 'cashfree',
-        paymentStatus: 'PENDING',
-        shippingAddress: shipping,
-        billingAddress: body.billing_address || shipping,
-        notes: body.notes || null,
-        items: {
-          create: items.map((item: any) => ({
-            productId: item.product_id,
-            quantity: Number(item.quantity || 1),
-            price: Number(item.price || 0),
-            productSnapshot: {
-              product_name: item.product_name,
-              product_image: item.product_image,
-            },
-          })),
-        },
-      },
-      include: { items: true, user: true },
+    const created = await createOrderFromRequest({
+      userId: guest.id,
+      body,
+      shippingAddress: shipping,
+      billingAddress: body.billing_address || shipping,
     });
 
-    const guestEmail = getString(created.user?.email) || getString(getShippingAddress(created.shippingAddress).email);
-    if (guestEmail) {
-      sendOrderPlacedEmail({
-        orderId: created.id,
-        orderNumber: created.orderNumber,
-        customerName: getString(created.user?.name) || getString(getShippingAddress(created.shippingAddress).full_name) || 'Customer',
-        customerEmail: guestEmail,
-        total: Number(created.total || 0),
-        status: created.paymentStatus,
-      }).catch((e) => console.error('[Orders] Guest placed email failed (non-fatal):', e));
-    }
+    notifyAdminOrderEventSafe(buildOrderAdminPayload(created, 'order_placed'));
 
-    return res.status(201).json(toClientOrder(created));
+    return res.status(201).json({
+      ...toClientOrder(created),
+      checkout_token: createCheckoutToken(created.id),
+    });
   } catch (error) {
-    return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to create guest order' });
+    const message = error instanceof Error ? error.message : 'Failed to create guest order';
+    const statusCode = message.includes('unavailable') || message.includes('stock') || message.includes('Invalid')
+      ? 400
+      : 500;
+    return res.status(statusCode).json({ message });
   }
 });
 

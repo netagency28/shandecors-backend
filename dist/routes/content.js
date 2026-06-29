@@ -8,6 +8,7 @@ const fs_1 = require("fs");
 const path_1 = __importDefault(require("path"));
 const contentStore_1 = require("../services/contentStore");
 const email_1 = require("../services/email");
+const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
 const CONTACT_INQUIRIES_PATH = path_1.default.join(process.cwd(), 'data', 'contact-inquiries.json');
 const readInquiries = async () => {
@@ -25,7 +26,7 @@ const writeInquiries = async (rows) => {
     await fs_1.promises.mkdir(dir, { recursive: true });
     await fs_1.promises.writeFile(CONTACT_INQUIRIES_PATH, `${JSON.stringify(rows, null, 2)}\n`, 'utf8');
 };
-router.post('/contact-inquiry', async (req, res) => {
+router.post('/contact-inquiry', rateLimiters_1.contactLimiter, async (req, res) => {
     try {
         const name = String(req.body?.name || '').trim();
         const email = String(req.body?.email || '').trim().toLowerCase();

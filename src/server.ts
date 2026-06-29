@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import path from 'path';
 import * as Sentry from '@sentry/node';
@@ -33,6 +34,9 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
 }
 if (!process.env.RESEND_API_KEY || !process.env.SENDER_EMAIL) {
   console.warn('⚠️  RESEND_API_KEY or SENDER_EMAIL is not set — transactional emails will not be sent.');
+}
+if (!process.env.CHECKOUT_TOKEN_SECRET) {
+  console.warn('⚠️  CHECKOUT_TOKEN_SECRET is not set — payment create/verify will fail.');
 }
 
 const app = express();
@@ -77,6 +81,7 @@ const parseAllowedOrigins = () => {
     'http://127.0.0.1:3000',
     'https://shandecors.store',
     'https://www.shandecors.store',
+    'https://shandecors.vercel.app',
   ];
 
   return Array.from(new Set([...configuredOrigins, ...defaultOrigins]));
@@ -89,7 +94,19 @@ const isOriginAllowed = (origin?: string) => {
     return true;
   }
 
-  return allowedOrigins.includes(normalizeOrigin(origin));
+  const normalized = normalizeOrigin(origin);
+  if (allowedOrigins.includes(normalized)) {
+    return true;
+  }
+
+  // Allow LAN dev origins when testing from a phone/tablet on the same network.
+  if (process.env.NODE_ENV !== 'production') {
+    return /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(
+      normalized,
+    );
+  }
+
+  return false;
 };
 
 const corsOptions: cors.CorsOptions = {
@@ -102,8 +119,15 @@ const corsOptions: cors.CorsOptions = {
     callback(new Error(`CORS origin not allowed: ${origin}`));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'baggage', 'sentry-trace'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'baggage',
+    'sentry-trace',
+    'traceparent',
+    'tracestate',
+  ],
   preflightContinue: false,
   optionsSuccessStatus: 204,
 };
@@ -143,8 +167,17 @@ const httpLogger = morgan(
 // Sentry request handler — must be the first middleware to capture full request context
 app.use(Sentry.Handlers.requestHandler());
 
+// CORS before helmet/rate-limit so browser preflight always gets correct headers
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+app.use(cookieParser());
+
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  // API is consumed cross-origin by the React app (e.g. :3000 → :8000)
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use(compression());
 app.use(httpLogger);
 
@@ -162,11 +195,7 @@ app.get('/health', async (_req, res) => {
   }
 });
 
-// Explicit preflight handler
-app.options('*', cors(corsOptions));
-
 app.use(limiter);
-app.use(cors(corsOptions));
 
 // Webhook route needs raw body for HMAC signature verification — must come before express.json()
 app.use('/api/payments/webhook', express.raw({ type: '*/*' }));
@@ -174,30 +203,24 @@ app.use('/api/payments/webhook', express.raw({ type: '*/*' }));
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Simple test endpoint (no database required)
-app.get('/test', (req, res) => {
-  res.status(200).json({
-    message: 'CORS Test Endpoint - Working!',
-    origin: req.headers.origin,
-    timestamp: new Date().toISOString(),
-    env: {
-      NODE_ENV: process.env.NODE_ENV,
-      PORT: process.env.PORT,
-      HAS_DB_URL: !!process.env.DATABASE_URL
-    }
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/test', (req, res) => {
+    res.status(200).json({
+      message: 'CORS Test Endpoint - Working!',
+      origin: req.headers.origin,
+      timestamp: new Date().toISOString(),
+    });
   });
-});
 
-// Debug endpoint for CORS testing
-app.get('/debug-cors', (req, res) => {
-  res.status(200).json({
-    message: 'CORS Debug Endpoint',
-    origin: req.headers.origin,
-    allowedOrigins,
-    headers: req.headers,
-    timestamp: new Date().toISOString(),
+  app.get('/debug-cors', (req, res) => {
+    res.status(200).json({
+      message: 'CORS Debug Endpoint',
+      origin: req.headers.origin,
+      allowedOrigins,
+      timestamp: new Date().toISOString(),
+    });
   });
-});
+}
 
 // API routes
 app.use('/api', routes);

@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.aiLimiter = exports.webhookLimiter = exports.adminLimiter = exports.userLimiter = exports.checkoutLimiter = exports.authLimiter = exports.browseLimiter = void 0;
+exports.contactLimiter = exports.aiLimiter = exports.webhookLimiter = exports.adminLimiter = exports.userLimiter = exports.checkoutLimiter = exports.authLimiter = exports.browseLimiter = void 0;
 const express_rate_limit_1 = __importStar(require("express-rate-limit"));
 const rate_limit_redis_1 = require("rate-limit-redis");
 const redis_1 = require("../config/redis");
@@ -121,11 +121,21 @@ exports.webhookLimiter = (0, express_rate_limit_1.default)({
 exports.aiLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 60 * 1000,
     limit: 20,
-    keyGenerator: (req) => req.user?.id || (0, express_rate_limit_1.ipKeyGenerator)(req),
+    keyGenerator: (req) => req.user?.id || (0, express_rate_limit_1.ipKeyGenerator)(req.ip || 'unknown'),
     standardHeaders: true,
     legacyHeaders: false,
     skip: skipOptions,
     store: makeStore('ai'),
     handler: makeHandler('AI usage limit reached. Please try again in an hour.', 60 * 60 * 1000),
+});
+// 8. Contact form
+exports.contactLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 60 * 60 * 1000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: skipOptions,
+    store: makeStore('contact'),
+    handler: makeHandler('Too many contact requests. Please try again later.', 60 * 60 * 1000),
 });
 //# sourceMappingURL=rateLimiters.js.map

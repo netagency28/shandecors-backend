@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import getPrismaClient from '../services/database';
+import { getAccessTokenFromCookies } from '../services/auth-cookies';
 
 const getSupabaseClient = (): SupabaseClient => {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
@@ -19,6 +20,11 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
+const resolveRole = (dbRole?: string | null) => {
+  if (dbRole === 'ADMIN' || dbRole === 'CUSTOMER') return dbRole;
+  return 'CUSTOMER';
+};
+
 export const authMiddleware = async (
   req: AuthenticatedRequest,
   res: Response,
@@ -26,12 +32,15 @@ export const authMiddleware = async (
 ) => {
   try {
     const authHeader = req.headers.authorization;
+    const cookieToken = getAccessTokenFromCookies(req.cookies || {});
+    const token = authHeader?.startsWith('Bearer ')
+      ? authHeader.substring(7)
+      : cookieToken;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!token) {
       return res.status(401).json({ message: 'No authorization token provided' });
     }
 
-    const token = authHeader.substring(7);
     const supabase = getSupabaseClient();
     const {
       data: { user },
@@ -42,25 +51,18 @@ export const authMiddleware = async (
       return res.status(401).json({ message: 'Invalid or expired token' });
     }
 
-    let dbUser: {
-      id: string;
-      email: string;
-      name: string | null;
-      role: string;
-    } | null = null;
+    const prisma = getPrismaClient();
+    const dbUser = await prisma.user.findUnique({ where: { email: user.email } });
 
-    try {
-      const prisma = getPrismaClient();
-      dbUser = await prisma.user.findUnique({ where: { email: user.email } });
-    } catch (dbError) {
-      console.warn('Auth middleware could not load local user profile:', dbError);
+    if (!dbUser) {
+      return res.status(401).json({ message: 'User profile not found' });
     }
 
     req.user = {
-      id: dbUser?.id || user.id,
-      email: user.email,
-      name: dbUser?.name || user.user_metadata?.name || null,
-      role: dbUser?.role || user.user_metadata?.role || 'CUSTOMER',
+      id: dbUser.id,
+      email: dbUser.email,
+      name: dbUser.name || user.user_metadata?.name || null,
+      role: resolveRole(dbUser.role),
     };
 
     return next();

@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { ALLOWED_CONTENT_SLUGS, readSiteContentEntry } from '../services/contentStore';
 import { sendContactAcknowledgementEmail } from '../services/email';
+import { contactLimiter } from '../middleware/rateLimiters';
 
 const router = Router();
 const CONTACT_INQUIRIES_PATH = path.join(process.cwd(), 'data', 'contact-inquiries.json');
@@ -32,7 +33,7 @@ const writeInquiries = async (rows: ContactInquiry[]) => {
   await fs.writeFile(CONTACT_INQUIRIES_PATH, `${JSON.stringify(rows, null, 2)}\n`, 'utf8');
 };
 
-router.post('/contact-inquiry', async (req, res) => {
+router.post('/contact-inquiry', contactLimiter, async (req, res) => {
   try {
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();

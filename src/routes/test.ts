@@ -3,8 +3,14 @@ import getPrismaClient from '../services/database';
 
 const router = Router();
 
-// GET /api/test/db - Test database connection
-router.get('/db', async (req, res) => {
+const isProduction = () => process.env.NODE_ENV === 'production';
+
+// GET /api/test/db - Test database connection (development only)
+router.get('/db', async (_req, res) => {
+  if (isProduction()) {
+    return res.status(404).json({ message: 'Not found' });
+  }
+
   try {
     const prisma = getPrismaClient();
     

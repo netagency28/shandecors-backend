@@ -42,6 +42,7 @@ const helmet_1 = __importDefault(require("helmet"));
 const compression_1 = __importDefault(require("compression"));
 const morgan_1 = __importDefault(require("morgan"));
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
 const Sentry = __importStar(require("@sentry/node"));
@@ -61,6 +62,15 @@ const validateEnv = () => {
     }
 };
 validateEnv();
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn('⚠️  SUPABASE_SERVICE_ROLE_KEY is not set — signup confirmation and password reset emails will not work.');
+}
+if (!process.env.RESEND_API_KEY || !process.env.SENDER_EMAIL) {
+    console.warn('⚠️  RESEND_API_KEY or SENDER_EMAIL is not set — transactional emails will not be sent.');
+}
+if (!process.env.CHECKOUT_TOKEN_SECRET) {
+    console.warn('⚠️  CHECKOUT_TOKEN_SECRET is not set — payment create/verify will fail.');
+}
 const app = (0, express_1.default)();
 // Sentry must be initialised before any middleware so it can instrument Express
 if (process.env.SENTRY_DSN) {
@@ -100,6 +110,7 @@ const parseAllowedOrigins = () => {
         'http://127.0.0.1:3000',
         'https://shandecors.store',
         'https://www.shandecors.store',
+        'https://shandecors.vercel.app',
     ];
     return Array.from(new Set([...configuredOrigins, ...defaultOrigins]));
 };
@@ -108,7 +119,15 @@ const isOriginAllowed = (origin) => {
     if (!origin) {
         return true;
     }
-    return allowedOrigins.includes(normalizeOrigin(origin));
+    const normalized = normalizeOrigin(origin);
+    if (allowedOrigins.includes(normalized)) {
+        return true;
+    }
+    // Allow LAN dev origins when testing from a phone/tablet on the same network.
+    if (process.env.NODE_ENV !== 'production') {
+        return /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(normalized);
+    }
+    return false;
 };
 const corsOptions = {
     origin: (origin, callback) => {
@@ -119,8 +138,15 @@ const corsOptions = {
         callback(new Error(`CORS origin not allowed: ${origin}`));
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'baggage', 'sentry-trace'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'baggage',
+        'sentry-trace',
+        'traceparent',
+        'tracestate',
+    ],
     preflightContinue: false,
     optionsSuccessStatus: 204,
 };
@@ -152,8 +178,15 @@ const httpLogger = (0, morgan_1.default)(':method :url :status-color :response-t
 });
 // Sentry request handler — must be the first middleware to capture full request context
 app.use(Sentry.Handlers.requestHandler());
+// CORS before helmet/rate-limit so browser preflight always gets correct headers
+app.use((0, cors_1.default)(corsOptions));
+app.options('*', (0, cors_1.default)(corsOptions));
+app.use((0, cookie_parser_1.default)());
 // Middleware
-app.use((0, helmet_1.default)());
+app.use((0, helmet_1.default)({
+    // API is consumed cross-origin by the React app (e.g. :3000 → :8000)
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
 app.use((0, compression_1.default)());
 app.use(httpLogger);
 // SEO sitemap — before rate limiter so crawlers are not throttled
@@ -169,37 +202,28 @@ app.get('/health', async (_req, res) => {
         res.status(503).json({ status: 'degraded', db: 'disconnected', timestamp: new Date().toISOString() });
     }
 });
-// Explicit preflight handler
-app.options('*', (0, cors_1.default)(corsOptions));
 app.use(limiter);
-app.use((0, cors_1.default)(corsOptions));
 // Webhook route needs raw body for HMAC signature verification — must come before express.json()
 app.use('/api/payments/webhook', express_1.default.raw({ type: '*/*' }));
 app.use(express_1.default.json({ limit: '1mb' }));
 app.use(express_1.default.urlencoded({ extended: true }));
-// Simple test endpoint (no database required)
-app.get('/test', (req, res) => {
-    res.status(200).json({
-        message: 'CORS Test Endpoint - Working!',
-        origin: req.headers.origin,
-        timestamp: new Date().toISOString(),
-        env: {
-            NODE_ENV: process.env.NODE_ENV,
-            PORT: process.env.PORT,
-            HAS_DB_URL: !!process.env.DATABASE_URL
-        }
+if (process.env.NODE_ENV !== 'production') {
+    app.get('/test', (req, res) => {
+        res.status(200).json({
+            message: 'CORS Test Endpoint - Working!',
+            origin: req.headers.origin,
+            timestamp: new Date().toISOString(),
+        });
     });
-});
-// Debug endpoint for CORS testing
-app.get('/debug-cors', (req, res) => {
-    res.status(200).json({
-        message: 'CORS Debug Endpoint',
-        origin: req.headers.origin,
-        allowedOrigins,
-        headers: req.headers,
-        timestamp: new Date().toISOString(),
+    app.get('/debug-cors', (req, res) => {
+        res.status(200).json({
+            message: 'CORS Debug Endpoint',
+            origin: req.headers.origin,
+            allowedOrigins,
+            timestamp: new Date().toISOString(),
+        });
     });
-});
+}
 // API routes
 app.use('/api', routes_1.default);
 // Sentry error handler — must be before the custom error handler to capture unhandled exceptions

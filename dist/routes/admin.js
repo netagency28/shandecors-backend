@@ -9,7 +9,9 @@ const database_1 = __importDefault(require("../services/database"));
 const auth_1 = require("../middleware/auth");
 const contentStore_1 = require("../services/contentStore");
 const email_1 = require("../services/email");
+const admin_notifications_1 = require("../services/admin-notifications");
 const rateLimiters_1 = require("../middleware/rateLimiters");
+const order_filters_1 = require("../utils/order-filters");
 const router = (0, express_1.Router)();
 router.use(rateLimiters_1.adminLimiter, auth_1.authMiddleware, auth_1.adminMiddleware);
 const toClientProduct = (product) => ({
@@ -113,22 +115,27 @@ const buildWeeklySeries = (orders) => {
 router.get('/dashboard', async (_req, res) => {
     try {
         const prisma = (0, database_1.default)();
-        const paidWhere = { paymentStatus: 'COMPLETED' };
+        const paidWhere = {
+            paymentStatus: 'COMPLETED',
+            ...order_filters_1.excludeCodOrdersWhere,
+        };
         const incomingWhere = {
             paymentStatus: { in: ['PENDING', 'PROCESSING'] },
             status: { notIn: ['CANCELLED', 'REFUNDED'] },
+            ...order_filters_1.excludeCodOrdersWhere,
         };
         const [totalOrders, totalProducts, activeProducts, totalUsers, revenueAgg, incomingAgg, grouped, recent, paidOrders, lowStockProducts, orderItemGrouped,] = await Promise.all([
-            prisma.order.count(),
+            prisma.order.count({ where: order_filters_1.excludeCodOrdersWhere }),
             prisma.product.count(),
             prisma.product.count({ where: { isActive: true } }),
             prisma.user.count(),
             prisma.order.aggregate({ _sum: { total: true }, where: paidWhere }),
             prisma.order.aggregate({ _sum: { total: true }, where: incomingWhere }),
-            prisma.order.groupBy({ by: ['status'], _count: { _all: true } }),
+            prisma.order.groupBy({ by: ['status'], _count: { _all: true }, where: order_filters_1.excludeCodOrdersWhere }),
             prisma.order.findMany({
                 take: 5,
                 orderBy: { createdAt: 'desc' },
+                where: order_filters_1.excludeCodOrdersWhere,
                 include: { items: true },
             }),
             prisma.order.findMany({ where: paidWhere, select: { createdAt: true, total: true } }),
@@ -319,7 +326,10 @@ router.get('/orders', async (req, res) => {
         const limit = Math.min(Number(req.query.limit) || 100, 200);
         const parsedStatus = parseOrderStatus(typeof req.query.status === 'string' ? req.query.status : undefined);
         const orders = await prisma.order.findMany({
-            where: parsedStatus ? { status: parsedStatus } : undefined,
+            where: {
+                ...order_filters_1.excludeCodOrdersWhere,
+                ...(parsedStatus ? { status: parsedStatus } : {}),
+            },
             include: { items: true },
             orderBy: { createdAt: 'desc' },
             take: limit,
@@ -333,8 +343,11 @@ router.get('/orders', async (req, res) => {
 router.get('/orders/:orderId', async (req, res) => {
     try {
         const prisma = (0, database_1.default)();
-        const order = await prisma.order.findUnique({
-            where: { id: req.params.orderId },
+        const order = await prisma.order.findFirst({
+            where: {
+                id: req.params.orderId,
+                ...order_filters_1.excludeCodOrdersWhere,
+            },
             include: { items: true },
         });
         if (!order)
@@ -719,6 +732,23 @@ router.put('/reviews/:reviewId/reply', async (req, res) => {
     }
     catch (error) {
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to save reply' });
+    }
+});
+router.post('/notifications/test', async (_req, res) => {
+    try {
+        const result = await (0, admin_notifications_1.testAdminNotifications)();
+        const statusCode = result.email.ok || result.telegram.ok ? 200 : 502;
+        return res.status(statusCode).json({
+            message: result.telegram.ok
+                ? 'Test notification sent — check Telegram and admin email inbox'
+                : 'Test completed with errors — see telegram/email fields',
+            ...result,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({
+            message: error instanceof Error ? error.message : 'Failed to send test notification',
+        });
     }
 });
 exports.default = router;

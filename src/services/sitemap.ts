@@ -31,11 +31,25 @@ const escapeXml = (value: string) =>
 export const buildSitemapXml = async (): Promise<string> => {
   const prisma = getPrismaClient();
 
-  const products = await prisma.product.findMany({
-    where: { isActive: true, deletedAt: null },
-    select: { slug: true, updatedAt: true },
-    orderBy: { updatedAt: 'desc' },
-  });
+  const [products, categories] = await Promise.all([
+    prisma.product.findMany({
+      where: { isActive: true, deletedAt: null },
+      select: { slug: true, updatedAt: true },
+      orderBy: { updatedAt: 'desc' },
+    }),
+    prisma.category.findMany({
+      where: { isActive: true },
+      select: { slug: true, updatedAt: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
+
+  const categoryEntries: SitemapEntry[] = categories.map((category) => ({
+    loc: `/products?category=${category.slug}`,
+    changefreq: 'weekly',
+    priority: '0.85',
+    lastmod: category.updatedAt.toISOString().split('T')[0],
+  }));
 
   const productEntries: SitemapEntry[] = products.map((product) => ({
     loc: `/products/${product.slug}`,
@@ -44,7 +58,7 @@ export const buildSitemapXml = async (): Promise<string> => {
     lastmod: product.updatedAt.toISOString().split('T')[0],
   }));
 
-  const entries = [...STATIC_PAGES, ...productEntries];
+  const entries = [...STATIC_PAGES, ...categoryEntries, ...productEntries];
 
   const urls = entries
     .map((entry) => {

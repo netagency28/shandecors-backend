@@ -6,10 +6,10 @@ import { createError, type AppError } from '../middleware/errorHandler';
 
 const USE_MOCK_AUTH = process.env.USE_MOCK_AUTH === 'true' || !process.env.SUPABASE_URL?.includes('supabase.co');
 
-const supabaseFetch = (input: string | URL, init?: RequestInit) => {
+const supabaseFetch: typeof fetch = (input, init) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), 12000);
-  return fetch(input as URL, { ...init, signal: controller.signal })
+  return fetch(input, { ...init, signal: controller.signal })
     .finally(() => clearTimeout(id));
 };
 

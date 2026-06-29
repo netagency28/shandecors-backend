@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createError = exports.errorHandler = void 0;
+const admin_notifications_1 = require("../services/admin-notifications");
 const errorHandler = (err, req, res, next) => {
     const statusCode = err.statusCode || 500;
     const message = err.message || 'Internal Server Error';
@@ -11,6 +12,18 @@ const errorHandler = (err, req, res, next) => {
         method: req.method,
         timestamp: new Date().toISOString(),
     });
+    if (statusCode >= 500) {
+        (0, admin_notifications_1.notifyAdminAlertSafe)({
+            title: 'Server error',
+            message: err.message || 'Internal Server Error',
+            severity: 'error',
+            context: {
+                method: req.method,
+                path: req.originalUrl || req.url,
+                statusCode,
+            },
+        });
+    }
     res.status(statusCode).json({
         success: false,
         error: {

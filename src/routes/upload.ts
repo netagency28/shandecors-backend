@@ -1,24 +1,27 @@
 import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import { getStorageService, buildStoragePath } from '../services/storage';
+import { authMiddleware, adminMiddleware } from '../middleware/auth';
+import { validateFileBuffer } from '../utils/file-validation';
 import { z } from 'zod';
 
 const router = Router();
 
+router.use(authMiddleware, adminMiddleware);
+
 const ALLOWED_IMAGE_MIME = /^image\/(jpeg|jpg|png|gif|webp)$/;
 const ALLOWED_VIDEO_MIME = /^video\/(mp4|webm|quicktime|x-msvideo|ogg)$/;
-const ALLOWED_EXT = /\.(jpeg|jpg|png|gif|webp|mp4|webm|mov|avi|ogg)$/i;
 
 const fileFilter: multer.Options['fileFilter'] = (_req, file, cb) => {
   const mimeOk = ALLOWED_IMAGE_MIME.test(file.mimetype) || ALLOWED_VIDEO_MIME.test(file.mimetype);
-  const extOk = ALLOWED_EXT.test(file.originalname);
+  const extOk = /\.(jpeg|jpg|png|gif|webp|mp4|webm|mov|avi|ogg)$/i.test(file.originalname);
   if (mimeOk && extOk) return cb(null, true);
   cb(new Error('Invalid file type. Allowed: images (jpeg, png, gif, webp) and videos (mp4, webm, mov).'));
 };
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter,
 });
 
@@ -26,12 +29,20 @@ const uploadSchema = z.object({
   type: z.enum(['product', 'category', 'user', 'video', 'site']).default('product'),
 });
 
+const assertValidBuffer = (file: Express.Multer.File) => {
+  if (!validateFileBuffer(file.buffer, file.mimetype)) {
+    throw new Error('File content does not match the declared file type');
+  }
+};
+
 // POST /api/upload/single
 router.post('/single', upload.single('file'), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: { message: 'No file uploaded' } });
     }
+
+    assertValidBuffer(req.file);
 
     const { type } = uploadSchema.parse(req.body);
     const storagePath = buildStoragePath(type, req.file.originalname, req.file.mimetype);
@@ -54,7 +65,7 @@ router.post('/single', upload.single('file'), async (req: Request, res: Response
       },
     });
   } catch (err) {
-    return res.status(500).json({
+    return res.status(400).json({
       success: false,
       error: { message: err instanceof Error ? err.message : 'Upload failed' },
     });
@@ -68,14 +79,17 @@ router.post('/multiple', upload.array('files', 10), async (req: Request, res: Re
       return res.status(400).json({ success: false, error: { message: 'No files uploaded' } });
     }
 
+    const files = req.files as Express.Multer.File[];
+    files.forEach(assertValidBuffer);
+
     const { type } = uploadSchema.parse(req.body);
     const storage = getStorageService();
 
     const results = await Promise.all(
-      (req.files as Express.Multer.File[]).map((file) => {
+      files.map((file) => {
         const storagePath = buildStoragePath(type, file.originalname, file.mimetype);
         return storage.uploadFile(file.buffer, storagePath, file.mimetype);
-      })
+      }),
     );
 
     const successful = results.filter((r) => !r.error);
@@ -86,12 +100,12 @@ router.post('/multiple', upload.array('files', 10), async (req: Request, res: Re
       data: {
         uploaded: successful.map((r) => ({ url: r.url, path: r.path })),
         failed: failed.map((r) => r.error),
-        total: (req.files as Express.Multer.File[]).length,
+        total: files.length,
         successful: successful.length,
       },
     });
   } catch (err) {
-    return res.status(500).json({
+    return res.status(400).json({
       success: false,
       error: { message: err instanceof Error ? err.message : 'Upload failed' },
     });
@@ -102,8 +116,8 @@ router.post('/multiple', upload.array('files', 10), async (req: Request, res: Re
 router.delete('/:path(*)', async (req: Request, res: Response) => {
   try {
     const filePath = req.params.path;
-    if (!filePath) {
-      return res.status(400).json({ success: false, error: { message: 'File path is required' } });
+    if (!filePath || filePath.includes('..')) {
+      return res.status(400).json({ success: false, error: { message: 'Invalid file path' } });
     }
 
     const storage = getStorageService();

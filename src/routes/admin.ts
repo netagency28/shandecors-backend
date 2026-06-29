@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
 import getPrismaClient from '../services/database';
 import { adminMiddleware, authMiddleware, AuthenticatedRequest } from '../middleware/auth';
 import { ALLOWED_CONTENT_SLUGS, readSiteContent, readSiteContentEntry, updateSiteContentEntry } from '../services/contentStore';
 import { sendOrderStatusEmail } from '../services/email';
+import { testAdminNotifications } from '../services/admin-notifications';
 import { adminLimiter } from '../middleware/rateLimiters';
+import { excludeCodOrdersWhere } from '../utils/order-filters';
 
 const router = Router();
 router.use(adminLimiter, authMiddleware, adminMiddleware);
@@ -118,10 +121,14 @@ router.get('/dashboard', async (_req: AuthenticatedRequest, res) => {
   try {
     const prisma = getPrismaClient();
 
-    const paidWhere = { paymentStatus: 'COMPLETED' as const };
-    const incomingWhere: any = {
+    const paidWhere = {
+      paymentStatus: 'COMPLETED' as const,
+      ...excludeCodOrdersWhere,
+    };
+    const incomingWhere: Prisma.OrderWhereInput = {
       paymentStatus: { in: ['PENDING', 'PROCESSING'] },
       status: { notIn: ['CANCELLED', 'REFUNDED'] },
+      ...excludeCodOrdersWhere,
     };
 
     const [
@@ -137,16 +144,17 @@ router.get('/dashboard', async (_req: AuthenticatedRequest, res) => {
       lowStockProducts,
       orderItemGrouped,
     ] = await Promise.all([
-      prisma.order.count(),
+      prisma.order.count({ where: excludeCodOrdersWhere }),
       prisma.product.count(),
       prisma.product.count({ where: { isActive: true } }),
       prisma.user.count(),
       prisma.order.aggregate({ _sum: { total: true }, where: paidWhere }),
       prisma.order.aggregate({ _sum: { total: true }, where: incomingWhere }),
-      prisma.order.groupBy({ by: ['status'], _count: { _all: true } }),
+      prisma.order.groupBy({ by: ['status'], _count: { _all: true }, where: excludeCodOrdersWhere }),
       prisma.order.findMany({
         take: 5,
         orderBy: { createdAt: 'desc' },
+        where: excludeCodOrdersWhere,
         include: { items: true },
       }),
       prisma.order.findMany({ where: paidWhere, select: { createdAt: true, total: true } }),
@@ -350,7 +358,10 @@ router.get('/orders', async (req, res) => {
     const parsedStatus = parseOrderStatus(typeof req.query.status === 'string' ? req.query.status : undefined);
 
     const orders = await prisma.order.findMany({
-      where: parsedStatus ? { status: parsedStatus as any } : undefined,
+      where: {
+        ...excludeCodOrdersWhere,
+        ...(parsedStatus ? { status: parsedStatus as any } : {}),
+      },
       include: { items: true },
       orderBy: { createdAt: 'desc' },
       take: limit,
@@ -365,8 +376,11 @@ router.get('/orders', async (req, res) => {
 router.get('/orders/:orderId', async (req, res) => {
   try {
     const prisma = getPrismaClient();
-    const order = await prisma.order.findUnique({
-      where: { id: req.params.orderId },
+    const order = await prisma.order.findFirst({
+      where: {
+        id: req.params.orderId,
+        ...excludeCodOrdersWhere,
+      },
       include: { items: true },
     });
 
@@ -792,6 +806,23 @@ router.put('/reviews/:reviewId/reply', async (req, res) => {
     return res.json(updated);
   } catch (error) {
     return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to save reply' });
+  }
+});
+
+router.post('/notifications/test', async (_req, res) => {
+  try {
+    const result = await testAdminNotifications();
+    const statusCode = result.email.ok || result.telegram.ok ? 200 : 502;
+    return res.status(statusCode).json({
+      message: result.telegram.ok
+        ? 'Test notification sent — check Telegram and admin email inbox'
+        : 'Test completed with errors — see telegram/email fields',
+      ...result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: error instanceof Error ? error.message : 'Failed to send test notification',
+    });
   }
 });
 

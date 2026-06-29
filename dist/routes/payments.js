@@ -41,6 +41,8 @@ const crypto_1 = __importDefault(require("crypto"));
 const Sentry = __importStar(require("@sentry/node"));
 const database_1 = __importDefault(require("../services/database"));
 const email_1 = require("../services/email");
+const admin_notifications_1 = require("../services/admin-notifications");
+const checkout_token_1 = require("../services/checkout-token");
 const rateLimiters_1 = require("../middleware/rateLimiters");
 const router = (0, express_1.Router)();
 const getShippingAddress = (value) => {
@@ -55,6 +57,40 @@ const getShippingAddress = (value) => {
 };
 const getString = (value) => (typeof value === 'string' ? value : '');
 const cleanEnv = (value) => String(value || '').split('#')[0].trim();
+const normalizeOrigin = (origin) => origin.trim().replace(/\/+$/, '');
+const isPrivateDevOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$/.test(normalizeOrigin(origin));
+const isAllowedReturnOrigin = (origin) => {
+    const normalized = normalizeOrigin(origin);
+    const configured = [
+        process.env.FRONTEND_URL,
+        process.env.CORS_ORIGINS,
+        process.env.CORS_ORIGIN,
+    ]
+        .filter((value) => Boolean(value))
+        .flatMap((value) => value.split(','))
+        .map((value) => normalizeOrigin(value.trim()))
+        .filter(Boolean);
+    if (configured.includes(normalized))
+        return true;
+    if (process.env.NODE_ENV !== 'production' && isPrivateDevOrigin(normalized))
+        return true;
+    return false;
+};
+const resolveReturnBaseUrl = (body) => {
+    const requested = getString(body?.return_origin);
+    if (requested && isAllowedReturnOrigin(requested)) {
+        return normalizeOrigin(requested);
+    }
+    return normalizeOrigin(process.env.FRONTEND_URL || 'http://localhost:3000');
+};
+const assertCheckoutAccess = (req, orderId) => {
+    const token = getString(req.body?.checkout_token) ||
+        getString(req.query?.checkout_token);
+    if (!(0, checkout_token_1.verifyCheckoutToken)(token, orderId)) {
+        return false;
+    }
+    return true;
+};
 const getCashfreeConfig = () => {
     const clientId = cleanEnv(process.env.CASHFREE_CLIENT_ID);
     const clientSecret = cleanEnv(process.env.CASHFREE_CLIENT_SECRET);
@@ -95,6 +131,10 @@ router.post('/create-order', rateLimiters_1.checkoutLimiter, async (req, res) =>
         const customerName = req.body?.customer_name;
         if (!orderId)
             return res.status(400).json({ message: 'order_id is required' });
+        const checkoutToken = getString(req.body?.checkout_token);
+        if (!assertCheckoutAccess(req, orderId)) {
+            return res.status(403).json({ message: 'Invalid or expired checkout token' });
+        }
         const order = await prisma.order.findUnique({ where: { id: orderId }, include: { user: true } });
         if (!order)
             return res.status(404).json({ message: 'Order not found' });
@@ -105,7 +145,7 @@ router.post('/create-order', rateLimiters_1.checkoutLimiter, async (req, res) =>
                 required_env: ['CASHFREE_CLIENT_ID', 'CASHFREE_CLIENT_SECRET', 'CASHFREE_ENVIRONMENT'],
             });
         }
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+        const returnBaseUrl = resolveReturnBaseUrl(req.body);
         const backendUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 8000}`;
         const shippingAddress = getShippingAddress(order.shippingAddress);
         const rawPhone = customerPhone || shippingAddress.phone || '';
@@ -138,7 +178,7 @@ router.post('/create-order', rateLimiters_1.checkoutLimiter, async (req, res) =>
                 customer_name: customerName || order.user?.name || shippingAddress.full_name || 'Customer',
             },
             order_meta: {
-                return_url: `${frontendUrl}/payment/success?order_id=${order.id}&gateway=cashfree`,
+                return_url: `${returnBaseUrl}/payment/success?order_id=${encodeURIComponent(order.id)}&gateway=cashfree&checkout_token=${encodeURIComponent(checkoutToken)}`,
                 notify_url: `${backendUrl}/api/payments/webhook`,
             },
         };
@@ -156,6 +196,16 @@ router.post('/create-order', rateLimiters_1.checkoutLimiter, async (req, res) =>
         const cfJson = (await cfResponse.json().catch(() => ({})));
         if (!cfResponse.ok) {
             console.error('Cashfree create-order error:', JSON.stringify(cfJson));
+            (0, admin_notifications_1.notifyAdminAlertSafe)({
+                title: 'Cashfree payment order creation failed',
+                message: 'Could not create a Cashfree payment session for checkout.',
+                severity: 'error',
+                context: {
+                    orderId,
+                    orderNumber: order.orderNumber,
+                    cashfreeStatus: cfResponse.status,
+                },
+            });
             return res.status(400).json({ message: 'Failed to create Cashfree payment order', cashfree_error: cfJson });
         }
         await prisma.order.update({
@@ -175,8 +225,11 @@ router.post('/create-order', rateLimiters_1.checkoutLimiter, async (req, res) =>
         return res.status(500).json({ message: error instanceof Error ? error.message : 'Failed to create payment order' });
     }
 });
-router.get('/verify/:orderId', async (req, res) => {
+router.get('/verify/:orderId', rateLimiters_1.checkoutLimiter, async (req, res) => {
     try {
+        if (!assertCheckoutAccess(req, req.params.orderId)) {
+            return res.status(403).json({ message: 'Invalid or expired checkout token' });
+        }
         const prisma = (0, database_1.default)();
         const order = await prisma.order.findUnique({ where: { id: req.params.orderId }, include: { user: true } });
         if (!order)
@@ -219,6 +272,13 @@ router.get('/verify/:orderId', async (req, res) => {
             if (order.status === 'PENDING') {
                 await markOrderConfirmedAndNotify(order, 'pending');
             }
+            const confirmedOrder = await prisma.order.findUnique({
+                where: { id: order.id },
+                include: { items: true, user: true },
+            });
+            if (confirmedOrder) {
+                (0, admin_notifications_1.notifyAdminOrderEventSafe)((0, admin_notifications_1.buildOrderAdminPayload)(confirmedOrder, 'payment_confirmed'));
+            }
         }
         else if (cfPaymentStatus === 'FAILED') {
             await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: 'FAILED' } });
@@ -242,6 +302,17 @@ router.get('/verify/:orderId', async (req, res) => {
             }
             catch (emailErr) {
                 console.error('Payment failed email error (non-fatal):', emailErr);
+            }
+            const failedOrder = await prisma.order.findUnique({
+                where: { id: order.id },
+                include: { items: true, user: true },
+            });
+            if (failedOrder) {
+                (0, admin_notifications_1.notifyAdminOrderEventSafe)((0, admin_notifications_1.buildOrderAdminPayload)(failedOrder, 'payment_failed', {
+                    failureReason: getString(latestPayment?.payment_message) ||
+                        getString(latestPayment?.error_details?.error_description) ||
+                        'Payment failed during verification',
+                }));
             }
         }
         return res.json({
@@ -270,7 +341,14 @@ router.post('/webhook', rateLimiters_1.webhookLimiter, async (req, res) => {
         const webhookSecret = process.env.CASHFREE_WEBHOOK_SECRET;
         if (!webhookSecret) {
             console.error('[Webhook] CASHFREE_WEBHOOK_SECRET not configured — cannot verify signature');
-            // Return 200 so Cashfree does not retry; alert must be resolved out-of-band
+            if (process.env.NODE_ENV === 'production') {
+                (0, admin_notifications_1.notifyAdminAlertSafe)({
+                    title: 'Cashfree webhook secret missing',
+                    message: 'CASHFREE_WEBHOOK_SECRET is not configured in production.',
+                    severity: 'critical',
+                });
+                return res.status(500).json({ error: 'WEBHOOK_NOT_CONFIGURED' });
+            }
             return res.status(200).json({ ok: true });
         }
         const signature = req.headers['x-webhook-signature'];
@@ -292,6 +370,11 @@ router.post('/webhook', rateLimiters_1.webhookLimiter, async (req, res) => {
             .digest('base64');
         if (expectedSig !== signature) {
             console.warn('[Webhook] Invalid signature — possible replay or spoofing attempt');
+            (0, admin_notifications_1.notifyAdminAlertSafe)({
+                title: 'Invalid Cashfree webhook signature',
+                message: 'A webhook request failed signature verification. Possible spoofing or misconfigured secret.',
+                severity: 'warning',
+            });
             return res.status(401).json({
                 error: 'INVALID_SIGNATURE',
                 message: 'Webhook signature verification failed',
@@ -320,7 +403,7 @@ router.post('/webhook', rateLimiters_1.webhookLimiter, async (req, res) => {
         // orderNumber is what we pass to Cashfree (SD-xxx), not the internal UUID
         const order = await prisma.order.findFirst({
             where: { orderNumber },
-            include: { user: true },
+            include: { user: true, items: true },
         });
         if (!order) {
             console.warn(`[Webhook] Order not found for orderNumber: ${orderNumber}`);
@@ -339,6 +422,12 @@ router.post('/webhook', rateLimiters_1.webhookLimiter, async (req, res) => {
                 extra: { expected: orderTotal, received: webhookAmount },
             });
             logWebhookFailure(orderId, paymentId, 'amount_mismatch');
+            (0, admin_notifications_1.notifyAdminAlertSafe)({
+                title: 'Payment amount mismatch',
+                message: mismatchMsg,
+                severity: 'critical',
+                context: { orderId, paymentId, expected: orderTotal, received: webhookAmount },
+            });
             return res.status(400).json({ error: 'AMOUNT_MISMATCH' });
         }
         // ── 4. PROCESS EVENT ───────────────────────────────────────────────────────
@@ -384,6 +473,13 @@ router.post('/webhook', rateLimiters_1.webhookLimiter, async (req, res) => {
             catch (emailErr) {
                 console.error('[Webhook] Order confirmation email failed (non-fatal):', emailErr);
             }
+            const confirmedOrder = await prisma.order.findUnique({
+                where: { id: order.id },
+                include: { items: true, user: true },
+            });
+            if (confirmedOrder) {
+                (0, admin_notifications_1.notifyAdminOrderEventSafe)((0, admin_notifications_1.buildOrderAdminPayload)(confirmedOrder, 'payment_confirmed'));
+            }
             // TODO: increment cashfree_payment_success_total Prometheus counter (Task 11)
             console.info(`[Webhook] SUCCESS timestamp=${new Date().toISOString()} order_id=${orderId} payment_id=${paymentId}`);
         }
@@ -412,6 +508,10 @@ router.post('/webhook', rateLimiters_1.webhookLimiter, async (req, res) => {
             catch (emailErr) {
                 console.error('[Webhook] Payment failure email error (non-fatal):', emailErr);
             }
+            const failureReason = getString(payload?.data?.payment?.payment_message) ||
+                getString(payload?.data?.payment?.error_details?.error_description) ||
+                eventType;
+            (0, admin_notifications_1.notifyAdminOrderEventSafe)((0, admin_notifications_1.buildOrderAdminPayload)(order, 'payment_failed', { failureReason }));
             logWebhookFailure(orderId, paymentId, eventType.toLowerCase());
             // TODO: increment cashfree_payment_failure_total Prometheus counter (Task 11)
         }
@@ -422,6 +522,12 @@ router.post('/webhook', rateLimiters_1.webhookLimiter, async (req, res) => {
         Sentry.captureException(error, {
             tags: { order_id: orderId, payment_id: paymentId },
             extra: { userId },
+        });
+        (0, admin_notifications_1.notifyAdminAlertSafe)({
+            title: 'Payment webhook processing error',
+            message: error instanceof Error ? error.message : 'Unknown webhook error',
+            severity: 'critical',
+            context: { orderId, paymentId },
         });
         // Always return 200 so Cashfree does not retry
         return res.status(200).json({ ok: true });

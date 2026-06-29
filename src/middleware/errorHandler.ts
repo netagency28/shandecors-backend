@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { notifyAdminAlertSafe } from '../services/admin-notifications';
 
 export interface AppError extends Error {
   statusCode?: number;
@@ -21,6 +22,19 @@ export const errorHandler = (
     method: req.method,
     timestamp: new Date().toISOString(),
   });
+
+  if (statusCode >= 500) {
+    notifyAdminAlertSafe({
+      title: 'Server error',
+      message: err.message || 'Internal Server Error',
+      severity: 'error',
+      context: {
+        method: req.method,
+        path: req.originalUrl || req.url,
+        statusCode,
+      },
+    });
+  }
 
   res.status(statusCode).json({
     success: false,

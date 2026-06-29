@@ -6,8 +6,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const database_1 = __importDefault(require("../services/database"));
 const router = (0, express_1.Router)();
-// GET /api/test/db - Test database connection
-router.get('/db', async (req, res) => {
+const isProduction = () => process.env.NODE_ENV === 'production';
+// GET /api/test/db - Test database connection (development only)
+router.get('/db', async (_req, res) => {
+    if (isProduction()) {
+        return res.status(404).json({ message: 'Not found' });
+    }
     try {
         const prisma = (0, database_1.default)();
         // Test connection
